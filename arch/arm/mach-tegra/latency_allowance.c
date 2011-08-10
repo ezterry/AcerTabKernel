@@ -414,6 +414,11 @@ int tegra_set_latency_allowance(enum tegra_la_id id,
 	if (id >= ID(DISPLAY_0A) && id <= ID(DISPLAY_HCB))
 		la_to_set /= 3;
 
+	/* until display can use latency allowance scaling, use a more
+	 * aggressive LA setting. Bug 862709 */
+	if (id >= ID(DISPLAY_0A) && id <= ID(DISPLAY_HCB))
+		la_to_set /= 3;
+
 	spin_lock(&safety_lock);
 	reg_read = readl(ci->reg_addr);
 	reg_write = (reg_read & ~ci->mask) |
