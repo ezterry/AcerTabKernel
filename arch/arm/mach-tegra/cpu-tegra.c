@@ -45,7 +45,20 @@
 
 /* tegra throttling and edp governors require frequencies in the table
    to be in ascending order */
-static struct cpufreq_frequency_table *freq_table;
+static struct cpufreq_frequency_table freq_table[] = {
+{ 0, 216000 },
+	{ 1, 312000 },
+	{ 2, 456000 },
+	{ 3, 608000 },
+	{ 4, 760000 },
+	{ 5, 816000 },
+	{ 6, 912000 },
+	{ 7, 1000000 },
+	{ 8, 1200000 },
+	{ 9, 1400000 },
+	{ 10, 1504000 },
+	{ 11, CPUFREQ_TABLE_END },
+};
 
 static struct clk *cpu_clk;
 static struct clk *emc_clk;
