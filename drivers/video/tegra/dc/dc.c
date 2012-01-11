@@ -973,11 +973,21 @@ unsigned long tegra_dc_get_bandwidth(struct tegra_dc_win *windows[], int n)
 	return tegra_dc_find_max_bandwidth(windows, n);
 }
 
+/* to save power, call when display memory clients would be idle */
+static void tegra_dc_clear_bandwidth(struct tegra_dc *dc)
+{
+	if (dc->emc_clk_rate)
+		clk_disable(dc->emc_clk);
+	dc->emc_clk_rate = 0;
+}
+
 static void tegra_dc_program_bandwidth(struct tegra_dc *dc)
 {
 	unsigned i;
 
 	if (dc->emc_clk_rate != dc->new_emc_clk_rate) {
+		if (!dc->emc_clk_rate) /* going from 0 to non-zero */
+			clk_enable(dc->emc_clk);
 		dc->emc_clk_rate = dc->new_emc_clk_rate;
 		clk_set_rate(dc->emc_clk, dc->emc_clk_rate);
 	}
@@ -1248,6 +1258,9 @@ int tegra_dc_update_windows(struct tegra_dc_win *windows[], int n)
 		update_mask |= NC_HOST_TRIG;
 
 	tegra_dc_writel(dc, update_mask, DC_CMD_STATE_CONTROL);
+
+	/* update EMC clock if calculated bandwidth has changed */
+	tegra_dc_program_bandwidth(dc);
 
 	mutex_unlock(&dc->lock);
 
@@ -1983,9 +1996,6 @@ static void tegra_dc_vblank(struct work_struct *work)
 
 	mutex_lock(&dc->lock);
 
-	/* update EMC clock if calculated bandwidth has changed */
-	tegra_dc_program_bandwidth(dc);
-
 	/* Update the SD brightness */
 	if (dc->enabled && dc->out->sd_settings)
 		nvsd_updated = nvsd_update_brightness(dc);
@@ -2001,6 +2011,13 @@ static void tegra_dc_vblank(struct work_struct *work)
 		if (bl)
 			backlight_update_status(bl);
 	}
+}
+
+static void tegra_dc_one_shot_worker(struct work_struct *work)
+{
+	struct tegra_dc *dc = container_of(work, struct tegra_dc, one_shot_work);
+	/* memory client has gone idle */
+	tegra_dc_clear_bandwidth(dc);
 }
 
 /* return an arbitrarily large number if count overflow occurs.
@@ -2118,6 +2135,8 @@ static void tegra_dc_one_shot_irq(struct tegra_dc *dc, unsigned long status)
 	}
 
 	if (status & FRAME_END_INT) {
+		schedule_work(&dc->one_shot_work);
+
 		/* Mark the frame_end as complete. */
 		if (completion_done(&dc->frame_end_complete))
 			complete(&dc->frame_end_complete);
@@ -2386,7 +2405,6 @@ static bool _tegra_dc_controller_enable(struct tegra_dc *dc)
 
 	tegra_dc_setup_clk(dc, dc->clk);
 	clk_enable(dc->clk);
-	clk_enable(dc->emc_clk);
 
 	/* do not accept interrupts during initialization */
 	tegra_dc_writel(dc, 0, DC_CMD_INT_ENABLE);
@@ -2418,7 +2436,6 @@ static bool _tegra_dc_controller_reset_enable(struct tegra_dc *dc)
 
 	tegra_dc_setup_clk(dc, dc->clk);
 	clk_enable(dc->clk);
-	clk_enable(dc->emc_clk);
 
 	if (dc->ndev->id == 0 && tegra_dcs[1] != NULL) {
 		mutex_lock(&tegra_dcs[1]->lock);
@@ -2497,7 +2514,7 @@ static void _tegra_dc_controller_disable(struct tegra_dc *dc)
 	if (dc->out_ops && dc->out_ops->disable)
 		dc->out_ops->disable(dc);
 
-	clk_disable(dc->emc_clk);
+	tegra_dc_clear_bandwidth(dc);
 	clk_disable(dc->clk);
 	tegra_dvfs_set_rate(dc->clk, 0);
 
@@ -2771,6 +2788,7 @@ static int tegra_dc_probe(struct nvhost_device *ndev)
 #endif
 	INIT_WORK(&dc->vblank_work, tegra_dc_vblank);
 	INIT_DELAYED_WORK(&dc->underflow_work, tegra_dc_underflow_worker);
+	INIT_WORK(&dc->one_shot_work, tegra_dc_one_shot_worker);
 
 	tegra_dc_init_lut_defaults(&dc->fb_lut);
 
