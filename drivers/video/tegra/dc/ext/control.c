@@ -23,8 +23,14 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
+#if !defined(CONFIG_TEGRA_HDMI)
+#include <linux/fb.h>
+#endif
 
 #include "tegra_dc_ext_priv.h"
+#if !defined(CONFIG_TEGRA_HDMI)
+#include "../edid.h"
+#endif
 
 static struct tegra_dc_ext_control g_control;
 
@@ -75,7 +81,11 @@ static int get_output_edid(struct tegra_dc_ext_control_output_edid *edid)
 
 	dc = tegra_dc_get_dc(edid->handle);
 
+#if defined(CONFIG_TEGRA_HDMI)
 	dc_edid = tegra_dc_get_edid(dc);
+#else
+	dc_edid = ERR_PTR(-ENODEV);
+#endif
 	if (IS_ERR(dc_edid))
 		return PTR_ERR(dc_edid);
 
@@ -98,7 +108,11 @@ static int get_output_edid(struct tegra_dc_ext_control_output_edid *edid)
 
 done:
 	if (dc_edid)
+#if defined(CONFIG_TEGRA_HDMI)
 		tegra_dc_put_edid(dc_edid);
+#else
+		tegra_edid_put_data(dc_edid);
+#endif
 
 	return ret;
 }

@@ -35,6 +35,7 @@
 
 #include <linux/pci.h>
 #include <linux/completion.h>
+#include <linux/mmc/sdio_func.h>
 
 #include <osl.h>
 #include <pcicfg.h>
@@ -48,15 +49,6 @@ extern void dhdsdio_isr(void * args);
 #include <dngl_stats.h>
 #include <dhd.h>
 #endif /* defined(OOB_INTR_ONLY) */
-#if defined(CONFIG_MACH_SANDGATE2G) || defined(CONFIG_MACH_LOGICPD_PXA270)
-#if !defined(BCMPLATFORM_BUS)
-#define BCMPLATFORM_BUS
-#endif /* !defined(BCMPLATFORM_BUS) */
-
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 19))
-#include <linux/platform_device.h>
-#endif /* KERNEL_VERSION(2, 6, 19) */
-#endif /* CONFIG_MACH_SANDGATE2G || CONFIG_MACH_LOGICPD_PXA270 */
 
 /**
  * SDIO Host Controller info
@@ -175,6 +167,7 @@ int bcmsdh_probe(struct device *dev)
 	bcmsdh_hc_t *sdhc = NULL;
 	ulong regs = 0;
 	bcmsdh_info_t *sdh = NULL;
+	struct sdio_func *func = container_of(dev, struct sdio_func, dev);
 #if !defined(BCMLXSDMMC) && defined(BCMPLATFORM_BUS)
 	struct platform_device *pdev;
 	struct resource *r;
@@ -250,10 +243,11 @@ int bcmsdh_probe(struct device *dev)
 	/* Read the vendor/device ID from the CIS */
 	vendevid = bcmsdh_query_device(sdh);
 
+
 	/* try to attach to the target device */
 	if (!(sdhc->ch = drvinfo.attach((vendevid >> 16),
-	                                 (vendevid & 0xFFFF), 0, 0, 0, 0,
-	                                (void *)regs, NULL, sdh))) {
+					func->device, 0, 0, 0, 0,
+					(void *)regs, NULL, sdh))) {
 		SDLX_MSG(("%s: device attach failed\n", __FUNCTION__));
 		goto err;
 	}
@@ -618,6 +612,13 @@ static irqreturn_t wlan_oob_irq(int irq, void *dev_id)
 	dhdsdio_isr((void *)dhdp->bus);
 
 	return IRQ_HANDLED;
+}
+
+void *bcmsdh_get_drvdata(void)
+{
+	if (!sdhcinfo)
+		return NULL;
+	return dev_get_drvdata(sdhcinfo->dev);
 }
 
 int bcmsdh_register_oob_intr(void * dhdp)

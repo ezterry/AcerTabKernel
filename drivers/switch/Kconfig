@@ -13,3 +13,27 @@ config SWITCH_GPIO
 	  Say Y here to enable GPIO based switch support.
 
 endif # SWITCH
+
+config ROTATELOCK
+	tristate "RotationLock Switch support"
+	default n
+
+config DOCK_V1
+	tristate "Acer Dock support"
+	default n
+
+config DOCK_V2
+	tristate "Acer Dock 2 support"
+	default n
+
+config PSENSOR3G
+	tristate "P-Sensor Switch support for 3G"
+	default n
+
+config SIMDETECT
+	tristate "SIM Hot-swap detection support"
+	default n
+
+config PSENSOR
+	tristate "P-Sensor Switch support"
+	default n

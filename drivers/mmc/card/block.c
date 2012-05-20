@@ -57,6 +57,7 @@ static DEFINE_MUTEX(block_mutex);
 #define INAND_CMD38_ARG_SECTRIM1 0x81
 #define INAND_CMD38_ARG_SECTRIM2 0x88
 
+#define MMC_CMD_RETRIES 3
 /*
  * The defaults come from config options but can be overriden by module
  * or bootarg options.
@@ -381,6 +382,7 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *req)
 		if (!mmc_card_blockaddr(card))
 			brq.cmd.arg <<= 9;
 		brq.cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_R1 | MMC_CMD_ADTC;
+		brq.cmd.retries = MMC_CMD_RETRIES;
 		brq.data.blksz = 512;
 		brq.stop.opcode = MMC_STOP_TRANSMISSION;
 		brq.stop.arg = 0;
@@ -461,6 +463,22 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *req)
 		 * programming mode even when things go wrong.
 		 */
 		if (brq.cmd.error || brq.data.error || brq.stop.error) {
+#if defined(CONFIG_ARCH_ACER_T20)
+			if (card->host->index == 1) {
+				spin_lock_irq(&md->lock);
+				ret = __blk_end_request(req, -ENODEV, brq.data.blksz * brq.data.blocks);
+				spin_unlock_irq(&md->lock);
+				continue;
+			}
+#elif defined(CONFIG_ARCH_ACER_T30)
+			if (card->host->index == 2) {
+				spin_lock_irq(&md->lock);
+				ret = __blk_end_request(req, -ENODEV, brq.data.blksz * brq.data.blocks);
+				spin_unlock_irq(&md->lock);
+				continue;
+			}
+#endif
+
 			if (brq.data.blocks > 1 && rq_data_dir(req) == READ) {
 				/* Redo read one sector at a time */
 				printk(KERN_WARNING "%s: retrying using single "
@@ -478,6 +496,8 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *req)
 			       "command, response %#x, card status %#x\n",
 			       req->rq_disk->disk_name, brq.cmd.error,
 			       brq.cmd.resp[0], status);
+			if (brq.cmd.error == -ENOMEDIUM)
+				goto cmd_err;
 		}
 
 		if (brq.data.error) {
@@ -551,6 +571,9 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *req)
 		spin_unlock_irq(&md->lock);
 	} while (ret);
 
+	if (brq.cmd.resp[0] & R1_URGENT_BKOPS)
+		mmc_card_set_need_bkops(card);
+
 	mmc_release_host(card->host);
 
 	return 1;
@@ -610,6 +633,10 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 		else
 			return mmc_blk_issue_discard_rq(mq, req);
 	} else {
+		/* Abort any current bk ops of eMMC card by issuing HPI */
+		if (mmc_card_mmc(mq->card) && mmc_card_doing_bkops(mq->card))
+			mmc_interrupt_hpi(mq->card);
+
 		return mmc_blk_issue_rw_rq(mq, req);
 	}
 }

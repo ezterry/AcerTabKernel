@@ -40,6 +40,13 @@ struct gpio_switch_platform_data {
 	const char *state_off;
 };
 
+#ifdef CONFIG_PSENSOR3G
+struct psensor_switch_platform_data {
+	const struct gpio_switch_platform_data *psormap;
+	size_t psormap_size;
+};
+#endif
+
 extern int switch_dev_register(struct switch_dev *sdev);
 extern void switch_dev_unregister(struct switch_dev *sdev);
 

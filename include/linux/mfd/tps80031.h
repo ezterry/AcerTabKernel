@@ -68,6 +68,28 @@ enum {
 	TPS80031_INT_NR,
 };
 
+enum adc_channel {
+	BATTERY_TYPE			= 0,  /* External ADC */
+	BATTERY_TEMPERATURE		= 1,  /* External ADC */
+	AUDIO_ACCESSORY			= 2,  /* External ADC */
+	TEMPERATURE_EXTERNAL_DIODE	= 3,  /* External ADC */
+	TEMPERATURE_MEASUREMENT		= 4,  /* External ADC */
+	GENERAL_PURPOSE_1		= 5,  /* External ADC */
+	GENERAL_PURPOSE_2		= 6,  /* External ADC */
+	SYSTEM_SUPPLY			= 7,  /* Internal ADC */
+	BACKUP_BATTERY			= 8,  /* Internal ADC */
+	EXTERNAL_CHARGER_INPUT		= 9,  /* Internal ADC */
+	VBUS				= 10, /* Internal ADC */
+	VBUS_DCDC_OUTPUT_CURRENT	= 11, /* Internal ADC */
+	DIE_TEMPERATURE_1		= 12, /* Internal ADC */
+	DIE_TEMPERATURE_2		= 13, /* Internal ADC */
+	USB_ID_LINE			= 14, /* Internal ADC */
+	TEST_NETWORK_1			= 15, /* Internal ADC */
+	TEST_NETWORK_2			= 16, /* Internal ADC */
+	BATTERY_CHARGING_CURRENT	= 17, /* Internal ADC */
+	BATTERY_VOLTAGE			= 18, /* Internal ADC */
+};
+
 enum TPS80031_GPIO {
 	TPS80031_GPIO_REGEN1,
 	TPS80031_GPIO_REGEN2,
@@ -75,6 +97,15 @@ enum TPS80031_GPIO {
 
 	/* Last entry */
 	TPS80031_GPIO_NR,
+};
+
+enum TPS80031_CLOCK32K {
+	TPS80031_CLOCK32K_AO,
+	TPS80031_CLOCK32K_G,
+	TPS80031_CLOCK32K_AUDIO,
+
+	/* Last entry */
+	TPS80031_CLOCK32K_NR,
 };
 
 enum {
@@ -91,6 +122,16 @@ enum {
 	I2C_ID3_ADDR = 0x4A,
 };
 
+/* External controls requests */
+enum tps80031_ext_control {
+	PWR_REQ_INPUT_NONE	= 0x00000000,
+	PWR_REQ_INPUT_PREQ1	= 0x00000001,
+	PWR_REQ_INPUT_PREQ2	= 0x00000002,
+	PWR_REQ_INPUT_PREQ3	= 0x00000004,
+	PWR_OFF_ON_SLEEP	= 0x00000008,
+	PWR_ON_ON_SLEEP		= 0x00000010,
+};
+
 struct tps80031_subdev_info {
 	int		id;
 	const char	*name;
@@ -102,10 +143,15 @@ struct tps80031_rtc_platform_data {
 	struct rtc_time time;
 };
 
-struct tps80031_32kclock_plat_data {
-	unsigned en_clk32kao:1;
-	unsigned en_clk32kg:1;
-	unsigned en_clk32kaudio:1;
+struct tps80031_clk32k_init_data {
+	int clk32k_nr;
+	bool enable;
+	unsigned long ext_ctrl_flag;
+};
+
+struct tps80031_gpio_init_data {
+	int gpio_nr;
+	unsigned long ext_ctrl_flag;
 };
 
 struct tps80031_platform_data {
@@ -114,10 +160,15 @@ struct tps80031_platform_data {
 	int gpio_base;
 	int irq_base;
 	struct tps80031_32kclock_plat_data *clk32k_pdata;
+	struct tps80031_gpio_init_data *gpio_init_data;
+	int gpio_init_data_size;
+	struct tps80031_clk32k_init_data *clk32k_init_data;
+	int clk32k_init_data_size;
 };
 
 struct tps80031_bg_platform_data {
 	int irq_base;
+	int battery_present;
 };
 
 /*
@@ -138,8 +189,16 @@ extern int tps80031_update(struct device *dev, int sid, int reg, uint8_t val,
 			   uint8_t mask);
 extern int tps80031_force_update(struct device *dev, int sid, int reg,
 				 uint8_t val, uint8_t mask);
+extern int tps80031_ext_power_req_config(struct device *dev,
+		unsigned long ext_ctrl_flag, int preq_bit,
+		int state_reg_add, int trans_reg_add);
+
 extern int tps80031_power_off(void);
 
 extern unsigned long tps80031_get_chip_info(struct device *dev);
+
+extern int tps80031_gpadc_conversion(int channle_no);
+
+extern int tps80031_get_pmu_version(struct device *dev);
 
 #endif /*__LINUX_MFD_TPS80031_H */

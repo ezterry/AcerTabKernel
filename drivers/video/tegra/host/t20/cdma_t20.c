@@ -81,7 +81,7 @@ static int t20_push_buffer_init(struct push_buffer *pb)
 	}
 
 	/* memory for storing nvmap client and handles for each opcode pair */
-	pb->nvmap = kzalloc(PUSH_BUFFER_SIZE/2 *
+	pb->nvmap = kzalloc(NVHOST_GATHER_QUEUE_SIZE *
 				sizeof(struct nvmap_client_handle),
 			GFP_KERNEL);
 	if (!pb->nvmap)
@@ -131,11 +131,12 @@ static void t20_push_buffer_push_to(struct push_buffer *pb,
 {
 	u32 cur = pb->cur;
 	u32 *p = (u32 *)((u32)pb->mapped + cur);
+	u32 cur_nvmap = (cur/8) & (NVHOST_GATHER_QUEUE_SIZE - 1);
 	BUG_ON(cur == pb->fence);
 	*(p++) = op1;
 	*(p++) = op2;
-	pb->nvmap[cur/8].client = client;
-	pb->nvmap[cur/8].handle = handle;
+	pb->nvmap[cur_nvmap].client = client;
+	pb->nvmap[cur_nvmap].handle = handle;
 	pb->cur = (cur + 8) & (PUSH_BUFFER_SIZE - 1);
 }
 
@@ -143,8 +144,21 @@ static void t20_push_buffer_push_to(struct push_buffer *pb,
  * Pop a number of two word slots from the push buffer
  * Caller must ensure push buffer is not empty
  */
-static void t20_push_buffer_pop_from(struct push_buffer *pb, unsigned int slots)
+static void t20_push_buffer_pop_from(struct push_buffer *pb,
+		unsigned int slots)
 {
+	/* Clear the nvmap references for old items from pb */
+	unsigned int i;
+	u32 fence_nvmap = pb->fence/8;
+	for(i = 0; i < slots; i++) {
+		int cur_fence_nvmap = (fence_nvmap+i)
+				& (NVHOST_GATHER_QUEUE_SIZE - 1);
+		struct nvmap_client_handle *h =
+				&pb->nvmap[cur_fence_nvmap];
+		h->client = NULL;
+		h->handle = NULL;
+	}
+	/* Advance the next write position */
 	pb->fence = (pb->fence + slots * 8) & (PUSH_BUFFER_SIZE - 1);
 }
 
@@ -268,7 +282,7 @@ static void t20_cdma_timeout_destroy(struct nvhost_cdma *cdma)
  * Increment timedout buffer's syncpt via CPU.
  */
 static void t20_cdma_timeout_cpu_incr(struct nvhost_cdma *cdma, u32 getptr,
-				u32 syncpt_incrs, u32 nr_slots)
+				u32 syncpt_incrs, u32 syncval, u32 nr_slots)
 {
 	struct nvhost_master *dev = cdma_to_dev(cdma);
 	struct push_buffer *pb = &cdma->push_buffer;
@@ -285,7 +299,7 @@ static void t20_cdma_timeout_cpu_incr(struct nvhost_cdma *cdma, u32 getptr,
 		void __iomem *p;
 		p = dev->sync_aperture + HOST1X_SYNC_SYNCPT_BASE_0 +
 				(NVWAITBASE_3D * sizeof(u32));
-		writel(readl(p) + syncpt_incrs, p);
+		writel(syncval, p);
 	}
 
 	/* NOP all the PB slots */
@@ -314,7 +328,7 @@ static void t20_cdma_timeout_pb_incr(struct nvhost_cdma *cdma, u32 getptr,
 	struct nvhost_master *dev = cdma_to_dev(cdma);
 	struct syncpt_buffer *sb = &cdma->syncpt_buffer;
 	struct push_buffer *pb = &cdma->push_buffer;
-	struct nvhost_userctx_timeout *timeout = cdma->timeout.ctx_timeout;
+	struct nvhost_hwctx *hwctx = cdma->timeout.ctx;
 	u32 getidx, *p;
 
 	/* should have enough slots to incr to desired count */
@@ -323,10 +337,10 @@ static void t20_cdma_timeout_pb_incr(struct nvhost_cdma *cdma, u32 getptr,
 	getidx = getptr - pb->phys;
 	if (exec_ctxsave) {
 		/* don't disrupt the CTXSAVE of a good/non-timed out ctx */
-		nr_slots -= timeout->hwctx->save_slots;
-		syncpt_incrs -= timeout->hwctx->save_incrs;
+		nr_slots -= hwctx->save_slots;
+		syncpt_incrs -= hwctx->save_incrs;
 
-		getidx += (timeout->hwctx->save_slots * 8);
+		getidx += (hwctx->save_slots * 8);
 		getidx &= (PUSH_BUFFER_SIZE - 1);
 
 		dev_dbg(&dev->pdev->dev,
@@ -364,60 +378,6 @@ static void t20_cdma_timeout_pb_incr(struct nvhost_cdma *cdma, u32 getptr,
 		dev_dbg(&dev->pdev->dev, "%s: NOP at 0x%x\n",
 			__func__, pb->phys + getidx);
 		getidx = (getidx + 8) & (PUSH_BUFFER_SIZE - 1);
-	}
-	wmb();
-}
-
-/**
- * Clear a context switch save for a timed out context that's been
- * queued up in a non-timed out context.
- */
-static void t20_cdma_timeout_clear_ctxsave(struct nvhost_cdma *cdma,
-				u32 getptr, u32 nr_slots)
-{
-	struct nvhost_master *dev = cdma_to_dev(cdma);
-	struct syncpt_buffer *sb = &cdma->syncpt_buffer;
-	struct push_buffer *pb = &cdma->push_buffer;
-	struct nvhost_userctx_timeout *timeout = cdma->timeout.ctx_timeout;
-	u32 getidx, *p;
-
-	getidx = getptr - pb->phys;
-	p = (u32 *)((u32)pb->mapped + getidx);
-
-	if (timeout->hwctx) {
-		u32 incrs, slots_to_clear;
-
-		slots_to_clear = timeout->hwctx->save_slots;
-		incrs = timeout->hwctx->save_incrs;
-
-		BUG_ON(slots_to_clear > nr_slots);
-		BUG_ON(incrs > sb->incr_per_buffer);
-
-		dev_dbg(&dev->pdev->dev,
-			"%s: clearing CTXSAVE at 0x%x, for %d slots %d incrs\n",
-			__func__, pb->phys + getidx, slots_to_clear, incrs);
-
-		/* first, GATHER incr for ctxsave */
-		if (incrs) {
-			u32 count = incrs * sb->words_per_incr;
-
-			p = (u32 *)((u32)pb->mapped + getidx);
-			*(p++) = nvhost_opcode_gather(count);
-			*(p++) = sb->phys;
-
-			getidx = (getidx + 8) & (PUSH_BUFFER_SIZE - 1);
-			slots_to_clear--;
-		}
-
-		/* NOP remaining slots */
-		while (slots_to_clear--) {
-			p = (u32 *)((u32)pb->mapped + getidx);
-			*(p++) = NVHOST_OPCODE_NOOP;
-			*(p++) = NVHOST_OPCODE_NOOP;
-			dev_dbg(&dev->pdev->dev, "%s: NOP at 0x%x\n",
-				__func__, pb->phys + getidx);
-			getidx = (getidx + 8) & (PUSH_BUFFER_SIZE - 1);
-		}
 	}
 	wmb();
 }
@@ -525,7 +485,7 @@ static void t20_cdma_stop(struct nvhost_cdma *cdma)
 
 	mutex_lock(&cdma->lock);
 	if (cdma->running) {
-		nvhost_cdma_wait(cdma, CDMA_EVENT_SYNC_QUEUE_EMPTY);
+		nvhost_cdma_wait_locked(cdma, CDMA_EVENT_SYNC_QUEUE_EMPTY);
 		writel(nvhost_channel_dmactrl(true, false, false),
 			chan_regs + HOST1X_CHANNEL_DMACTRL);
 		cdma->running = false;
@@ -627,9 +587,9 @@ static void t20_cdma_timeout_handler(struct work_struct *work)
 
 	mutex_lock(&cdma->lock);
 
-	if (!cdma->timeout.ctx_timeout) {
+	if (!cdma->timeout.clientid) {
 		dev_dbg(&dev->pdev->dev,
-			 "cdma_timeout: expired, but has NULL context\n");
+			 "cdma_timeout: expired, but has no clientid\n");
 		mutex_unlock(&cdma->lock);
 		return;
 	}
@@ -663,13 +623,14 @@ static void t20_cdma_timeout_handler(struct work_struct *work)
 		__func__,
 		cdma->timeout.syncpt_id,
 		syncpt_op(sp).name(sp, cdma->timeout.syncpt_id),
-		cdma->timeout.ctx_timeout,
+		cdma->timeout.ctx,
 		syncpt_val, cdma->timeout.syncpt_val);
 
 	/* stop HW, resetting channel/module */
 	cdma_op(cdma).timeout_teardown_begin(cdma);
 
 	nvhost_cdma_update_sync_queue(cdma, sp, &dev->pdev->dev);
+	mutex_unlock(&cdma->lock);
 }
 
 int nvhost_init_t20_cdma_support(struct nvhost_master *host)
@@ -684,7 +645,6 @@ int nvhost_init_t20_cdma_support(struct nvhost_master *host)
 	host->op.cdma.timeout_teardown_end = t20_cdma_timeout_teardown_end;
 	host->op.cdma.timeout_cpu_incr = t20_cdma_timeout_cpu_incr;
 	host->op.cdma.timeout_pb_incr = t20_cdma_timeout_pb_incr;
-	host->op.cdma.timeout_clear_ctxsave = t20_cdma_timeout_clear_ctxsave;
 
 	host->sync_queue_size = NVHOST_SYNC_QUEUE_SIZE;
 

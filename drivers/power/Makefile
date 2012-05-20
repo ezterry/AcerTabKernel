@@ -37,3 +37,7 @@ obj-$(CONFIG_CHARGER_ISP1704)	+= isp1704_charger.o
 obj-$(CONFIG_CHARGER_TWL4030)	+= twl4030_charger.o
 obj-$(CONFIG_CHARGER_GPIO)	+= gpio-charger.o
 obj-$(CONFIG_MAX8907C_CHARGER)	+= max8907c-charger.o
+obj-$(CONFIG_TEGRA_BPC_MGMT)	+= tegra_bpc_mgmt.o
+obj-$(CONFIG_BATTERY_ECBAT)	+= EC_battery.o
+obj-$(CONFIG_BATTERY_BQ27541)	+= bq27541_battery.o
+obj-$(CONFIG_LSC_FROM_EC)	+= lsc_from_ec.o

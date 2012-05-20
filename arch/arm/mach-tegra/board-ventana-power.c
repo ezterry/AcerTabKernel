@@ -90,6 +90,9 @@ static struct regulator_consumer_supply tps658621_ldo6_supply[] = {
 	REGULATOR_SUPPLY("vdd_ldo6", NULL),
 	REGULATOR_SUPPLY("vcsi", "tegra_camera"),
 	REGULATOR_SUPPLY("vdd_dmic", "tegra-snd-wm8903"),
+	REGULATOR_SUPPLY("vdd_i2c", "3-0030"),
+	REGULATOR_SUPPLY("vdd_i2c", "6-0072"),
+	REGULATOR_SUPPLY("vdd_i2c", "7-0072"),
 };
 static struct regulator_consumer_supply tps658621_ldo7_supply[] = {
 	REGULATOR_SUPPLY("vdd_ldo7", NULL),
@@ -228,7 +231,7 @@ static struct tegra_suspend_platform_data ventana_suspend_data = {
 	 */
 	.cpu_timer	= 2000,
 	.cpu_off_timer	= 100,
-	.suspend_mode	= TEGRA_SUSPEND_LP1,
+	.suspend_mode	= TEGRA_SUSPEND_LP0,
 	.core_timer	= 0x7e7e,
 	.core_off_timer = 0xf,
 	.corereq_high	= false,

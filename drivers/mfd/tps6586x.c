@@ -109,17 +109,21 @@ struct tps6586x {
 static inline int __tps6586x_read(struct i2c_client *client,
 				  int reg, uint8_t *val)
 {
-	int ret;
+	int ret, i;
+	int retry = 10;
 
-	ret = i2c_smbus_read_byte_data(client, reg);
-	if (ret < 0) {
-		dev_err(&client->dev, "failed reading at 0x%02x\n", reg);
-		return ret;
+	for (i = 0; i < retry; i++) {
+		ret = i2c_smbus_read_byte_data(client, reg);
+		if (ret < 0) {
+			dev_err(&client->dev, "failed reading at 0x%02x, retry = %d\n", reg, i + 1);
+			continue;
+		} else {
+			*val = (uint8_t)ret;
+			return 0;
+		}
 	}
 
-	*val = (uint8_t)ret;
-
-	return 0;
+	return ret;
 }
 
 static inline int __tps6586x_reads(struct i2c_client *client, int reg,
@@ -406,6 +410,15 @@ static irqreturn_t tps6586x_irq(int irq, void *data)
 	struct tps6586x *tps6586x = data;
 	u32 acks;
 	int ret = 0;
+	char *irq_info[] = {"TPS6586X_INT_PLDO_0", "TPS6586X_INT_PLDO_1", "TPS6586X_INT_PLDO_2",
+		"TPS6586X_INT_PLDO_3", "TPS6586X_INT_PLDO_4", "TPS6586X_INT_PLDO_5",
+		"TPS6586X_INT_PLDO_6", "TPS6586X_INT_PLDO_7", "TPS6586X_INT_COMP_DET",
+		"TPS6586X_INT_ADC", "TPS6586X_INT_PLDO_8", "TPS6586X_INT_PLDO_9",
+		"TPS6586X_INT_PSM_0", "TPS6586X_INT_PSM_1", "TPS6586X_INT_PSM_2",
+		"TPS6586X_INT_PSM_3", "TPS6586X_INT_RTC_ALM1", "TPS6586X_INT_ACUSB_OVP",
+		"TPS6586X_INT_USB_DET", "TPS6586X_INT_AC_DET", "TPS6586X_INT_BAT_DET",
+		"TPS6586X_INT_CHG_STAT", "TPS6586X_INT_CHG_TEMP", "TPS6586X_INT_PP",
+		"TPS6586X_INT_RESUME", "TPS6586X_INT_LOW_SYS", "TPS6586X_INT_RTC_ALM2"};
 
 	ret = tps6586x_reads(tps6586x->dev, TPS6586X_INT_ACK1,
 			     sizeof(acks), (uint8_t *)&acks);
@@ -420,8 +433,10 @@ static irqreturn_t tps6586x_irq(int irq, void *data)
 	while (acks) {
 		int i = __ffs(acks);
 
-		if (tps6586x->irq_en & (1 << i))
+		if (tps6586x->irq_en & (1 << i)) {
 			handle_nested_irq(tps6586x->irq_base + i);
+			dev_info(tps6586x->dev, "tps6586x interrupt source : %s\n", irq_info[i]);
+		}
 
 		acks &= ~(1 << i);
 	}
@@ -563,6 +578,9 @@ static int __devinit tps6586x_i2c_probe(struct i2c_client *client,
 	}
 
 	tps6586x_i2c_client = client;
+
+	/* Using external oscillator... */
+	tps6586x_set_bits(&client->dev, 0xc0, 0x40);
 
 	return 0;
 

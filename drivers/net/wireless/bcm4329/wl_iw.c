@@ -59,6 +59,7 @@ typedef const struct si_pub  si_t;
 
 #include <wl_iw.h>
 
+static int iw_link_state = 0;
 
 
 #ifndef IW_ENCODE_ALG_SM4
@@ -105,6 +106,11 @@ struct semaphore  ap_eth_sema;
 static struct completion ap_cfg_exited;
 static int wl_iw_set_ap_security(struct net_device *dev, struct ap_profile *ap);
 static int wl_iw_softap_deassoc_stations(struct net_device *dev, u8 *mac);
+#endif
+#define WL_IW_AUTO_TXPOWER_ADJ 1
+#ifdef WL_IW_AUTO_TXPOWER_ADJ
+static int iw_link_state_changed = 0;
+static int default_tx_power = 0;
 #endif
 
 #define WL_IW_IOCTL_CALL(func_call) \
@@ -1480,7 +1486,49 @@ exit_proc:
 	return res;
 }
 #endif
+#ifdef WL_IW_AUTO_TXPOWER_ADJ
+typedef enum wifi_link_mode {
+	WIFI_B_MODE = 1,
+	WIFI_G_MODE,
+	WIFI_N_MODE
+} wifi_link_mode_t;
 
+static int
+wl_iw_get_ch_info(struct net_device *dev, int *mode, int *channel)
+{
+	char bi_buf[256];
+	wl_bss_info_t *bi;
+	*(uint32*)bi_buf = htod32(WLC_IOCTL_SMLEN);
+
+	dev_wlc_ioctl(dev, WLC_GET_BSS_INFO, bi_buf,256);
+
+	bi = (wl_bss_info_t*)(bi_buf + 4);
+
+	if (dtoh32(bi->version) != WL_BSS_INFO_VERSION) {
+		WL_ERROR(("can't get bi info!\n"));
+		return -1;
+	}
+
+	/* check the bss info */
+	/* get channel */
+	*channel = (bi->ctl_ch == 0) ? CHSPEC_CHANNEL(bi->chanspec) : bi->ctl_ch;
+	WL_TRACE(("get channel = %d\n", *channel));
+
+	/* get mode b/g/n */
+	if (dtoh32(bi->rateset.count) <= 4) {
+		WL_TRACE(("b only mode\n"));
+		*mode = WIFI_B_MODE;
+	} else if (bi->ctl_ch) {
+		WL_TRACE(("n mode\n"));
+		*mode = WIFI_N_MODE;
+	} else {
+		WL_TRACE(("g mode\n"));
+		*mode = WIFI_G_MODE;
+	}
+
+	return 0;
+}
+#endif
 static int
 wl_iw_get_rssi(
 	struct net_device *dev,
@@ -1525,6 +1573,49 @@ wl_iw_get_rssi(
 	wrqu->data.length = p - extra + 1;
 
 	net_os_wake_unlock(dev);
+#ifdef WL_IW_AUTO_TXPOWER_ADJ
+	/* get default tx power value */
+	if (!default_tx_power) {
+		dev_wlc_intvar_get(dev, "qtxpower", &default_tx_power);
+		WL_ERROR(("default tx power is %d\n", default_tx_power));
+	}
+	if (iw_link_state_changed) {
+		int tw_power_set_value = default_tx_power;
+		int mode = 0;
+		int get_chan = 0;
+		/* check link up or link down */
+		if (iw_link_state == 0) {
+			/* link down, set tx power to default value */
+			tw_power_set_value = default_tx_power;
+		} else {
+			/* link up, check channel */
+			if (wl_iw_get_ch_info(dev, &mode, &get_chan) != 0)
+				goto end;
+
+			if (get_chan == 1) {
+				if (mode == WIFI_G_MODE) {
+					WL_ERROR(("--- WIFI_G_MODE channel 1\n"));
+					tw_power_set_value = 52;
+				} else if (mode == WIFI_N_MODE) {
+					tw_power_set_value = 52;
+				}
+			} else if (get_chan == 11) {
+				if (mode == WIFI_G_MODE) {
+					WL_ERROR(("--- WIFI_G_MODE channel 11\n"));
+					tw_power_set_value = 60;
+				} else if (mode == WIFI_N_MODE) {
+					tw_power_set_value = 52;
+				}
+			}
+		}
+
+		WL_ERROR(("--- set tx power to 0x%x\n", tw_power_set_value));
+		tw_power_set_value |= WL_TXPWR_OVERRIDE;
+		dev_wlc_intvar_set(dev, "qtxpower", tw_power_set_value);
+	}
+end:
+	iw_link_state_changed = 0;
+#endif
 	return error;
 }
 
@@ -3074,12 +3165,12 @@ static void wl_iw_send_scan_complete(iscan_info_t *iscan)
 	union iwreq_data wrqu;
 
 	memset(&wrqu, 0, sizeof(wrqu));
-
-	wireless_send_event(iscan->dev, SIOCGIWSCAN, &wrqu, NULL);
 #if defined(CONFIG_FIRST_SCAN)
 	if (g_first_broadcast_scan == BROADCAST_SCAN_FIRST_STARTED)
 		g_first_broadcast_scan = BROADCAST_SCAN_FIRST_RESULT_READY;
 #endif
+
+	wireless_send_event(iscan->dev, SIOCGIWSCAN, &wrqu, NULL);
 	WL_SCAN(("Send Event ISCAN complete\n"));
 #endif 
 }
@@ -6502,6 +6593,24 @@ static int set_ap_cfg(struct net_device *dev, struct ap_profile *ap)
 		}
 	}
 #endif 
+#ifdef WL_IW_AUTO_TXPOWER_ADJ
+	/* get default tx power value */
+	if (!default_tx_power) {
+		dev_wlc_intvar_get(dev, "qtxpower", &default_tx_power);
+		WL_TRACE(("default tx power is %d\n", default_tx_power));
+	}
+	{
+		int tw_power_set_value = default_tx_power;
+		if (channel == 1)
+			tw_power_set_value = 53;
+		else if (channel == 11)
+			tw_power_set_value = 46;
+
+		WL_TRACE(("set tx power to 0x%x\n", tw_power_set_value));
+		tw_power_set_value |= WL_TXPWR_OVERRIDE;
+		dev_wlc_intvar_set(dev, "qtxpower", tw_power_set_value);
+	}
+#endif
 fail:
 	WL_SOFTAP(("%s exit with %d\n", __FUNCTION__, res));
 
@@ -7917,6 +8026,10 @@ wl_iw_event(struct net_device *dev, wl_event_msg_t *e, void* data)
 			} else {
 				WL_TRACE(("STA_Link Down\n"));
 				g_ss_cache_ctrl.m_link_down = 1;
+				iw_link_state = 0;
+#ifdef WL_IW_AUTO_TXPOWER_ADJ
+				iw_link_state_changed = 1;
+#endif
 			}
 #else
 			g_ss_cache_ctrl.m_link_down = 1;
@@ -7942,6 +8055,10 @@ wl_iw_event(struct net_device *dev, wl_event_msg_t *e, void* data)
 				wl_iw_send_priv_event(priv_dev, "AP_UP");
 			} else {
 				WL_TRACE(("STA_LINK_UP\n"));
+				iw_link_state = 1;
+#ifdef WL_IW_AUTO_TXPOWER_ADJ
+				iw_link_state_changed = 1;
+#endif
 #if defined(ROAM_NOT_USED)
 				roam_no_success_send = FALSE;
 				roam_no_success = 0;

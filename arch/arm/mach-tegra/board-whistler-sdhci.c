@@ -1,7 +1,8 @@
 /*
- * arch/arm/mach-tegra/board-harmony-sdhci.c
+ * arch/arm/mach-tegra/board-whistler-sdhci.c
  *
  * Copyright (C) 2010 Google, Inc.
+ * Copyright (C) 2011 NVIDIA Corporation.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -33,6 +34,7 @@
 
 #define WHISTLER_WLAN_PWR	TEGRA_GPIO_PK5
 #define WHISTLER_WLAN_RST	TEGRA_GPIO_PK6
+#define WHISTLER_WLAN_WOW	TEGRA_GPIO_PU5
 
 #define WHISTLER_EXT_SDCARD_DETECT	TEGRA_GPIO_PI5
 
@@ -83,26 +85,25 @@ static struct wifi_platform_data whistler_wifi_control = {
 	.set_carddetect = whistler_wifi_set_carddetect,
 };
 
+static struct resource wifi_resource[] = {
+	[0] = {
+		.name	= "bcm4329_wlan_irq",
+		.start	= TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PU5),
+		.end	= TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PU5),
+		.flags	= IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHLEVEL | IORESOURCE_IRQ_SHAREABLE,
+	},
+};
+
 static struct platform_device whistler_wifi_device = {
 	.name           = "bcm4329_wlan",
 	.id             = 1,
+	.num_resources	= 1,
+	.resource	= wifi_resource,
 	.dev            = {
 		.platform_data = &whistler_wifi_control,
 	},
 };
 
-static struct resource sdhci_resource0[] = {
-	[0] = {
-		.start  = INT_SDMMC1,
-		.end    = INT_SDMMC1,
-		.flags  = IORESOURCE_IRQ,
-	},
-	[1] = {
-		.start	= TEGRA_SDMMC1_BASE,
-		.end	= TEGRA_SDMMC1_BASE + TEGRA_SDMMC1_SIZE-1,
-		.flags	= IORESOURCE_MEM,
-	},
-};
 static struct resource sdhci_resource1[] = {
 	[0] = {
 		.start  = INT_SDMMC2,
@@ -143,12 +144,6 @@ static struct resource sdhci_resource3[] = {
 	},
 };
 
-static struct tegra_sdhci_platform_data tegra_sdhci_platform_data0 = {
-	.cd_gpio = -1,
-	.wp_gpio = -1,
-	.power_gpio = -1,
-};
-
 static struct embedded_sdio_data embedded_sdio_data1 = {
 	.cccr   = {
 		.sdio_vsn       = 2,
@@ -168,10 +163,12 @@ static struct tegra_sdhci_platform_data tegra_sdhci_platform_data1 = {
 	.mmc_data = {
 		.register_status_notify	= whistler_wifi_status_register,
 		.embedded_sdio = &embedded_sdio_data1,
+		.built_in = 1,
 	},
 	.cd_gpio = -1,
 	.wp_gpio = -1,
 	.power_gpio = -1,
+	.max_clk_limit = 25000000,
 };
 
 static struct tegra_sdhci_platform_data tegra_sdhci_platform_data2 = {
@@ -184,16 +181,9 @@ static struct tegra_sdhci_platform_data tegra_sdhci_platform_data3 = {
 	.cd_gpio = -1,
 	.wp_gpio = -1,
 	.power_gpio = -1,
-};
-
-static struct platform_device tegra_sdhci_device0 = {
-	.name		= "sdhci-tegra",
-	.id		= 0,
-	.resource	= sdhci_resource0,
-	.num_resources	= ARRAY_SIZE(sdhci_resource0),
-	.dev = {
-		.platform_data = &tegra_sdhci_platform_data0,
-	},
+	.mmc_data = {
+		.built_in = 1,
+	}
 };
 
 static struct platform_device tegra_sdhci_device1 = {
@@ -230,26 +220,26 @@ static int __init whistler_wifi_init(void)
 {
 	gpio_request(WHISTLER_WLAN_PWR, "wlan_power");
 	gpio_request(WHISTLER_WLAN_RST, "wlan_rst");
+	gpio_request(WHISTLER_WLAN_WOW, "bcmsdh_sdmmc");
 
 	tegra_gpio_enable(WHISTLER_WLAN_PWR);
 	tegra_gpio_enable(WHISTLER_WLAN_RST);
+	tegra_gpio_enable(WHISTLER_WLAN_WOW);
 
 	gpio_direction_output(WHISTLER_WLAN_PWR, 0);
 	gpio_direction_output(WHISTLER_WLAN_RST, 0);
+	gpio_direction_input(WHISTLER_WLAN_WOW);
 
 	platform_device_register(&whistler_wifi_device);
 	return 0;
 }
 int __init whistler_sdhci_init(void)
 {
-	int ret;
-
 	tegra_gpio_enable(WHISTLER_EXT_SDCARD_DETECT);
 
 	platform_device_register(&tegra_sdhci_device3);
 	platform_device_register(&tegra_sdhci_device2);
 	platform_device_register(&tegra_sdhci_device1);
-	platform_device_register(&tegra_sdhci_device0);
 
 	whistler_wifi_init();
 	return 0;

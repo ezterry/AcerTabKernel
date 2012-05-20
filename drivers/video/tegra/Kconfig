@@ -4,13 +4,12 @@ comment "NVIDIA Tegra Display Driver options"
 
 config TEGRA_GRHOST
 	tristate "Tegra graphics host driver"
-	default y
 	help
 	  Driver for the Tegra graphics host hardware.
 
 config TEGRA_DC
 	tristate "Tegra Display Contoller"
-	depends on ARCH_TEGRA
+	depends on ARCH_TEGRA && TEGRA_GRHOST
 	select FB_MODE_HELPERS
 	select I2C
 	help
@@ -114,6 +113,19 @@ config NVMAP_CONVERT_CARVEOUT_TO_IOVMM
 	help
 	  Say Y here to force to convert carveout memory requests to
 	  I/O virtual memory requests.
+
+config TEGRA_HDMI
+	bool "Enable HDMI"
+	default n
+	help
+	  Say Y here to Enable HDMI.
+
+config TEGRA_NVHDCP
+	bool "Support NVHDCP content protection on HDMI"
+	default n
+	help
+	  Say Y here to support NVHDCP upstream and downstream protocols, this
+	  requires a correctly fused chip to negotiate keys.
 
 endif
 

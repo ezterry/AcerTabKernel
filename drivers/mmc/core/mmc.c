@@ -20,6 +20,12 @@
 #include "core.h"
 #include "bus.h"
 #include "mmc_ops.h"
+#include "sd_ops.h"
+
+#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
+#define SANDISK_X3_CID_MID 69
+unsigned int boot_partition_sectors = 0;
+#endif
 
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
@@ -253,8 +259,16 @@ static int mmc_read_ext_csd(struct mmc_card *card)
 			ext_csd[EXT_CSD_SEC_CNT + 3] << 24;
 
 		/* Cards with density > 2GiB are sector addressed */
-		if (card->ext_csd.sectors > (2u * 1024 * 1024 * 1024) / 512)
+		if (card->ext_csd.sectors > (2u * 1024 * 1024 * 1024) / 512) {
+#ifdef CONFIG_ARCH_ACER_T20
+			if (card->host->index == 0) {
+				/* size is in 256K chunks, i.e. 512 sectors each */
+				/* This algorithm is defined and used by nVidia, according to eMMC 4.41, size is in 128K chunks */
+				boot_partition_sectors = ext_csd[EXT_CSD_BOOT_SIZE_MULTI] * 512;
+			}
+#endif
 			mmc_card_set_blockaddr(card);
+		}
 	}
 
 	switch (ext_csd[EXT_CSD_CARD_TYPE] & EXT_CSD_CARD_TYPE_MASK) {
@@ -348,6 +362,27 @@ static int mmc_read_ext_csd(struct mmc_card *card)
 			ext_csd[EXT_CSD_SEC_FEATURE_SUPPORT];
 		card->ext_csd.trim_timeout = 300 *
 			ext_csd[EXT_CSD_TRIM_MULT];
+	}
+
+	if (card->ext_csd.rev >= 5) {
+		/* check whether the eMMC card supports HPI */
+		if (ext_csd[EXT_CSD_HPI_FEATURES] & 0x1) {
+			card->ext_csd.hpi = 1;
+			if (ext_csd[EXT_CSD_HPI_FEATURES] & 0x2)
+				card->ext_csd.hpi_cmd =	MMC_STOP_TRANSMISSION;
+			else
+				card->ext_csd.hpi_cmd = MMC_SEND_STATUS;
+			/*
+			 * Indicate the maximum timeout to close
+			 * a command interrupted by HPI
+			 */
+			card->ext_csd.out_of_int_time =
+				ext_csd[EXT_CSD_OUT_OF_INTERRUPT_TIME] * 10;
+		}
+
+		/* Check whether the eMMC card supports background ops */
+		if (ext_csd[EXT_CSD_BKOPS_SUPPORT] & 0x1)
+			card->ext_csd.bk_ops = 1;
 	}
 
 	if (ext_csd[EXT_CSD_ERASED_MEM_CONT])
@@ -536,6 +571,14 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		mmc_set_erase_size(card);
 	}
 
+#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
+	if (card->cid.manfid == SANDISK_X3_CID_MID) {
+		err = mmc_switch(card, 0x0, EXT_CSD_POWER_CLASS, 4);
+		if (err)
+			printk(KERN_ERR "%s: switch power class fail \n", mmc_hostname(card->host));
+	}
+#endif
+
 	/*
 	 * If enhanced_area_en is TRUE, host needs to enable ERASE_GRP_DEF
 	 * bit.  This bit will be lost every time after a reset or power off.
@@ -588,6 +631,40 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	}
 
 	/*
+	 * Enable HPI feature (if supported)
+	 */
+	if (card->ext_csd.hpi && (card->host->caps & MMC_CAP_BKOPS)) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+			EXT_CSD_HPI_MGMT, 1);
+		if (err && err != -EBADMSG)
+			goto free_card;
+		if (err) {
+			pr_warning("%s: Enabling HPI failed\n",
+				   mmc_hostname(card->host));
+			err = 0;
+		} else {
+			card->ext_csd.hpi_en = 1;
+		}
+	}
+
+	/*
+	 * Enable Background ops feature (if supported)
+	 */
+	if (card->ext_csd.bk_ops && (card->host->caps & MMC_CAP_BKOPS)) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+			EXT_CSD_BKOPS_EN, 1);
+		if (err && err != -EBADMSG)
+			goto free_card;
+		if (err) {
+			pr_warning("%s: Enabling BK ops failed\n",
+				   mmc_hostname(card->host));
+			err = 0;
+		} else {
+			card->ext_csd.bk_ops_en = 1;
+		}
+	}
+
+	/*
 	 * Compute bus speed.
 	 */
 	max_dtr = (unsigned int)-1;
@@ -606,10 +683,14 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	 */
 	if (mmc_card_highspeed(card)) {
 		if ((card->ext_csd.card_type & EXT_CSD_CARD_TYPE_DDR_1_8V)
-			&& (host->caps & (MMC_CAP_1_8V_DDR)))
+			&& ((host->caps & (MMC_CAP_1_8V_DDR |
+			     MMC_CAP_UHS_DDR50))
+				== (MMC_CAP_1_8V_DDR | MMC_CAP_UHS_DDR50)))
 				ddr = MMC_1_8V_DDR_MODE;
 		else if ((card->ext_csd.card_type & EXT_CSD_CARD_TYPE_DDR_1_2V)
-			&& (host->caps & (MMC_CAP_1_2V_DDR)))
+			&& ((host->caps & (MMC_CAP_1_2V_DDR |
+			     MMC_CAP_UHS_DDR50))
+				== (MMC_CAP_1_2V_DDR | MMC_CAP_UHS_DDR50)))
 				ddr = MMC_1_2V_DDR_MODE;
 	}
 
@@ -642,8 +723,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 					 EXT_CSD_BUS_WIDTH,
 					 ext_csd_bits[idx][0]);
 			if (!err) {
-				mmc_set_bus_width_ddr(card->host,
-						      bus_width, MMC_SDR_MODE);
+				mmc_set_bus_width(card->host, bus_width);
 				/*
 				 * If controller can't handle bus width test,
 				 * use the highest bus width to maintain
@@ -668,8 +748,29 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 				1 << bus_width, ddr);
 			goto free_card;
 		} else if (ddr) {
+			/*
+			 * eMMC cards can support 3.3V to 1.2V i/o (vccq)
+			 * signaling.
+			 *
+			 * EXT_CSD_CARD_TYPE_DDR_1_8V means 3.3V or 1.8V vccq.
+			 *
+			 * 1.8V vccq at 3.3V core voltage (vcc) is not required
+			 * in the JEDEC spec for DDR.
+			 *
+			 * Do not force change in vccq since we are obviously
+			 * working and no change to vccq is needed.
+			 *
+			 * WARNING: eMMC rules are NOT the same as SD DDR
+			 */
+			if (ddr == EXT_CSD_CARD_TYPE_DDR_1_2V) {
+				err = mmc_set_signal_voltage(host,
+					MMC_SIGNAL_VOLTAGE_120);
+				if (err)
+					goto err;
+			}
 			mmc_card_set_ddr_mode(card);
-			mmc_set_bus_width_ddr(card->host, bus_width, ddr);
+			mmc_set_timing(card->host, MMC_TIMING_UHS_DDR50);
+			mmc_set_bus_width(card->host, bus_width);
 		}
 	}
 

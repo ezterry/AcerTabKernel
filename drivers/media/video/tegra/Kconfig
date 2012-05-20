@@ -18,6 +18,44 @@ config VIDEO_OV5650
           This is a driver for the Omnivision OV5650 5MP camera sensor
           for use with the tegra isp.
 
+config VIDEO_YUV
+        tristate "SOC2031 camera sensor support"
+        depends on I2C && ARCH_TEGRA
+        default n
+        ---help---
+          This is a driver for MT9D115 2M YUV camera sensor
+
+config VIDEO_YUV5
+        tristate "SOC5140 camera sensor support"
+        depends on I2C && ARCH_TEGRA
+        default n
+        ---help---
+          This is a driver for MT9P111 5M YUV camera sensor
+
+config VIDEO_OV5640
+        tristate "OV5640 camera sensor support"
+        depends on I2C && ARCH_TEGRA
+        default n
+        ---help---
+          This is a driver for the Omnivision OV5640 5MP camera sensor
+          for use with the tegra isp.
+
+config VIDEO_OV9740
+        tristate "OV9740 camera sensor support"
+        depends on I2C && ARCH_TEGRA
+        default n
+        ---help---
+          This is a driver for the Omnivision OV9740 HD camera sensor
+          for use with the tegra isp.
+
+config VIDEO_OV14810
+        tristate "OV14810 camera sensor support"
+        depends on I2C && ARCH_TEGRA
+        ---help---
+          This is a driver for the Omnivision OV14810 14MP camera sensor
+          for use with the tegra isp.
+
+
 config VIDEO_OV9726
         tristate "OV9726 camera sensor support"
         depends on I2C && ARCH_TEGRA
@@ -45,6 +83,20 @@ config VIDEO_SOC380
         ---help---
           This is a driver for the Semco soc380 camera sensor
           for use with the tegra isp.
+
+config VIDEO_LTC3216
+        tristate "LTC3216 flash support"
+        depends on I2C && ARCH_TEGRA
+        default n
+        ---help---
+          This is a driver for the LTC3216 flash/torch camera device
+
+config TORCH_TPS61050YZGR
+        tristate "TPS61050YZGR flash/torch support"
+        depends on I2C && ARCH_TEGRA
+        default n
+        ---help---
+          This is a driver for the TPS61050YZGR flash/torch camera device
 
 config TORCH_SSL3250A
         tristate "SSL3250A flash/torch support"

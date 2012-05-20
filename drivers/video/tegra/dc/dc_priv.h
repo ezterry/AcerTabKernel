@@ -121,7 +121,7 @@ struct tegra_dc {
 	struct switch_dev		modeset_switch;
 #endif
 
-	struct completion		vblank_complete;
+	struct completion		frame_end_complete;
 
 	struct work_struct		vblank_work;
 
@@ -137,6 +137,7 @@ struct tegra_dc {
 #ifdef CONFIG_DEBUG_FS
 	struct dentry			*debugdir;
 #endif
+	struct tegra_dc_lut		fb_lut;
 };
 
 static inline void tegra_dc_io_start(struct tegra_dc *dc)
@@ -213,5 +214,9 @@ unsigned long tegra_dc_get_bandwidth(struct tegra_dc_win *wins[], int n);
 u32 tegra_dc_read_checksum_latched(struct tegra_dc *dc);
 void tegra_dc_enable_crc(struct tegra_dc *dc);
 void tegra_dc_disable_crc(struct tegra_dc *dc);
+
+void tegra_dc_set_out_pin_polars(struct tegra_dc *dc,
+				const struct tegra_dc_out_pin *pins,
+				const unsigned int n_pins);
 #endif
 

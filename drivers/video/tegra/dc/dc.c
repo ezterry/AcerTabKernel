@@ -54,6 +54,9 @@
 
 #define TEGRA_CRC_LATCHED_DELAY		34
 
+#define DC_COM_PIN_OUTPUT_POLARITY1_INIT_VAL	0x01000000
+#define DC_COM_PIN_OUTPUT_POLARITY3_INIT_VAL	0x0
+
 #ifndef CONFIG_TEGRA_FPGA_PLATFORM
 #define ALL_UF_INT (WIN_A_UF_INT | WIN_B_UF_INT | WIN_C_UF_INT)
 #else
@@ -676,29 +679,49 @@ static void tegra_dc_init_lut_defaults(struct tegra_dc_lut *lut)
 		lut->r[i] = lut->g[i] = lut->b[i] = (u8)i;
 }
 
-static int tegra_dc_lut_is_defaults(struct tegra_dc_lut *lut)
+static int tegra_dc_loop_lut(struct tegra_dc *dc,
+			     struct tegra_dc_win *win,
+			     int(*lambda)(struct tegra_dc *dc, int i, u32 rgb))
 {
-	unsigned int i;
-	for (i = 0; i < 256; i++)
-		if ((lut->r[i] != i) || (lut->g[i] != i) || (lut->b[i] != i))
+	struct tegra_dc_lut *lut = &win->lut;
+	struct tegra_dc_lut *global_lut = &dc->fb_lut;
+	int i;
+	for (i = 0; i < 256; i++) {
+
+		u32 r = (u32)lut->r[i];
+		u32 g = (u32)lut->g[i];
+		u32 b = (u32)lut->b[i];
+
+		if (!(win->ppflags & TEGRA_WIN_PPFLAG_CP_FBOVERRIDE)) {
+			r = (u32)global_lut->r[r];
+			g = (u32)global_lut->g[g];
+			b = (u32)global_lut->b[b];
+		}
+
+		if (!lambda(dc, i, r | (g<<8) | (b<<16)))
 			return 0;
+	}
+	return 1;
+}
+
+static int tegra_dc_lut_isdefaults_lambda(struct tegra_dc *dc, int i, u32 rgb)
+{
+	if (rgb != (i | (i<<8) | (i<<16)))
+		return 0;
+	return 1;
+}
+
+static int tegra_dc_set_lut_setreg_lambda(struct tegra_dc *dc, int i, u32 rgb)
+{
+	tegra_dc_writel(dc, rgb, DC_WIN_COLOR_PALETTE(i));
 	return 1;
 }
 
 static void tegra_dc_set_lut(struct tegra_dc *dc, struct tegra_dc_win* win)
 {
-	unsigned int i;
-	unsigned long val;
-	struct tegra_dc_lut *lut = &win->lut;
+	unsigned long val = tegra_dc_readl(dc, DC_WIN_WIN_OPTIONS);
 
-	for (i = 0; i < 256; i++) {
-		u32 rgb = ((u32)lut->r[i]) |
-			  ((u32)lut->g[i]<<8) |
-			  ((u32)lut->b[i]<<16);
-		tegra_dc_writel(dc, rgb, DC_WIN_COLOR_PALETTE(i));
-	}
-
-	val = tegra_dc_readl(dc, DC_WIN_WIN_OPTIONS);
+	tegra_dc_loop_lut(dc, win, tegra_dc_set_lut_setreg_lambda);
 
 	if (win->ppflags & TEGRA_WIN_PPFLAG_CP_ENABLE)
 		val |= CP_ENABLE;
@@ -708,7 +731,7 @@ static void tegra_dc_set_lut(struct tegra_dc *dc, struct tegra_dc_win* win)
 	tegra_dc_writel(dc, val, DC_WIN_WIN_OPTIONS);
 }
 
-int tegra_dc_update_lut(struct tegra_dc *dc, int win_idx, int fboveride)
+static int tegra_dc_update_winlut(struct tegra_dc *dc, int win_idx, int fbovr)
 {
 	struct tegra_dc_win *win = &dc->windows[win_idx];
 
@@ -719,15 +742,15 @@ int tegra_dc_update_lut(struct tegra_dc *dc, int win_idx, int fboveride)
 		return -EFAULT;
 	}
 
-	if (!tegra_dc_lut_is_defaults(&win->lut))
+	if (fbovr > 0)
+		win->ppflags |= TEGRA_WIN_PPFLAG_CP_FBOVERRIDE;
+	else if (fbovr == 0)
+		win->ppflags &= ~TEGRA_WIN_PPFLAG_CP_FBOVERRIDE;
+
+	if (!tegra_dc_loop_lut(dc, win, tegra_dc_lut_isdefaults_lambda))
 		win->ppflags |= TEGRA_WIN_PPFLAG_CP_ENABLE;
 	else
 		win->ppflags &= ~TEGRA_WIN_PPFLAG_CP_ENABLE;
-
-	if (fboveride)
-		win->ppflags |= TEGRA_WIN_PPFLAG_CP_FBOVERRIDE;
-	else
-		win->ppflags &= ~TEGRA_WIN_PPFLAG_CP_FBOVERRIDE;
 
 	tegra_dc_writel(dc, WINDOW_A_SELECT << win_idx,
 			DC_CMD_DISPLAY_WINDOW_HEADER);
@@ -735,6 +758,20 @@ int tegra_dc_update_lut(struct tegra_dc *dc, int win_idx, int fboveride)
 	tegra_dc_set_lut(dc, win);
 
 	mutex_unlock(&dc->lock);
+
+	return 0;
+}
+
+int tegra_dc_update_lut(struct tegra_dc *dc, int win_idx, int fboveride)
+{
+	if (win_idx > -1)
+		return tegra_dc_update_winlut(dc, win_idx, fboveride);
+
+	for (win_idx = 0; win_idx < DC_N_WINDOWS; win_idx++) {
+		int err = tegra_dc_update_winlut(dc, win_idx, fboveride);
+		if (err)
+			return err;
+	}
 
 	return 0;
 }
@@ -947,7 +984,7 @@ static void tegra_dc_program_bandwidth(struct tegra_dc *dc)
 
 	for (i = 0; i < DC_N_WINDOWS; i++) {
 		struct tegra_dc_win *w = &dc->windows[i];
-		if (w->bandwidth != w->new_bandwidth)
+		if (w->bandwidth != w->new_bandwidth && w->new_bandwidth != 0)
 			tegra_dc_set_latency_allowance(dc, w);
 	}
 }
@@ -1196,15 +1233,15 @@ int tegra_dc_update_windows(struct tegra_dc_win *windows[], int n)
 
 	tegra_dc_writel(dc, update_mask << 8, DC_CMD_STATE_CONTROL);
 
+	tegra_dc_writel(dc, FRAME_END_INT | V_BLANK_INT, DC_CMD_INT_STATUS);
 	if (!no_vsync) {
-		val = tegra_dc_readl(dc, DC_CMD_INT_ENABLE);
+		val = tegra_dc_readl(dc, DC_CMD_INT_MASK);
 		val |= (FRAME_END_INT | V_BLANK_INT | ALL_UF_INT);
-		tegra_dc_writel(dc, val, DC_CMD_INT_ENABLE);
+		tegra_dc_writel(dc, val, DC_CMD_INT_MASK);
 	} else {
-		val = tegra_dc_readl(dc, DC_CMD_INT_ENABLE);
+		val = tegra_dc_readl(dc, DC_CMD_INT_MASK);
 		val &= ~(FRAME_END_INT | V_BLANK_INT | ALL_UF_INT);
-
-		tegra_dc_writel(dc, val, DC_CMD_INT_ENABLE);
+		tegra_dc_writel(dc, val, DC_CMD_INT_MASK);
 	}
 
 	tegra_dc_writel(dc, update_mask, DC_CMD_STATE_CONTROL);
@@ -1312,13 +1349,25 @@ void tegra_dc_setup_clk(struct tegra_dc *dc, struct clk *clk)
 	int pclk;
 
 	if (dc->out->type == TEGRA_DC_OUT_RGB) {
+		unsigned long rate;
 		struct clk *parent_clk =
 			clk_get_sys(NULL, dc->out->parent_clk ? : "pll_p");
 
 		if (clk_get_parent(clk) != parent_clk)
 			clk_set_parent(clk, parent_clk);
+
+		if (parent_clk != clk_get_sys(NULL, "pll_p")) {
+			struct clk *base_clk = clk_get_parent(parent_clk);
+
+			/* Assuming either pll_d or pll_d2 is used */
+			rate = dc->mode.pclk * 2;
+
+			if (rate != clk_get_rate(base_clk))
+				clk_set_rate(base_clk, rate);
+		}
 	}
 
+#if defined(CONFIG_TEGRA_HDMI)
 	if (dc->out->type == TEGRA_DC_OUT_HDMI) {
 		unsigned long rate;
 		struct clk *parent_clk =
@@ -1340,6 +1389,7 @@ void tegra_dc_setup_clk(struct tegra_dc *dc, struct clk *clk)
 		if (clk_get_parent(clk) != parent_clk)
 			clk_set_parent(clk, parent_clk);
 	}
+#endif
 
 	if (dc->out->type == TEGRA_DC_OUT_DSI) {
 		unsigned long rate;
@@ -1368,7 +1418,7 @@ void tegra_dc_setup_clk(struct tegra_dc *dc, struct clk *clk)
 			}
 		}
 
-		rate = dc->mode.pclk;
+		rate = dc->mode.pclk * 2;
 		if (rate != clk_get_rate(base_clk))
 			clk_set_rate(base_clk, rate);
 
@@ -1566,18 +1616,6 @@ static int tegra_dc_program_mode(struct tegra_dc *dc, struct tegra_dc_mode *mode
 	tegra_dc_writel(dc, DE_SELECT_ACTIVE | DE_CONTROL_NORMAL,
 			DC_DISP_DATA_ENABLE_OPTIONS);
 
-	val = tegra_dc_readl(dc, DC_COM_PIN_OUTPUT_POLARITY1);
-	if (mode->flags & TEGRA_DC_MODE_FLAG_NEG_V_SYNC)
-		val |= PIN1_LVS_OUTPUT;
-	else
-		val &= ~PIN1_LVS_OUTPUT;
-
-	if (mode->flags & TEGRA_DC_MODE_FLAG_NEG_H_SYNC)
-		val |= PIN1_LHS_OUTPUT;
-	else
-		val &= ~PIN1_LHS_OUTPUT;
-	tegra_dc_writel(dc, val, DC_COM_PIN_OUTPUT_POLARITY1);
-
 	/* TODO: MIPI/CRT/HDMI clock cals */
 
 	val = DISP_DATA_FORMAT_DF1P1C;
@@ -1745,7 +1783,7 @@ tegra_dc_config_pwm(struct tegra_dc *dc, struct tegra_dc_pwm_params *cfg)
 }
 EXPORT_SYMBOL(tegra_dc_config_pwm);
 
-static void tegra_dc_set_out_pin_polars(struct tegra_dc *dc,
+void tegra_dc_set_out_pin_polars(struct tegra_dc *dc,
 				const struct tegra_dc_out_pin *pins,
 				const unsigned int n_pins)
 {
@@ -1798,8 +1836,8 @@ static void tegra_dc_set_out_pin_polars(struct tegra_dc *dc,
 		}
 	}
 
-	pol1 = tegra_dc_readl(dc, DC_COM_PIN_OUTPUT_POLARITY1);
-	pol3 = tegra_dc_readl(dc, DC_COM_PIN_OUTPUT_POLARITY3);
+	pol1 = DC_COM_PIN_OUTPUT_POLARITY1_INIT_VAL;
+	pol3 = DC_COM_PIN_OUTPUT_POLARITY3_INIT_VAL;
 
 	pol1 |= set1;
 	pol1 &= ~unset1;
@@ -1823,9 +1861,11 @@ static void tegra_dc_set_out(struct tegra_dc *dc, struct tegra_dc_out *out)
 		dc->out_ops = &tegra_dc_rgb_ops;
 		break;
 
+#if defined(CONFIG_TEGRA_HDMI)
 	case TEGRA_DC_OUT_HDMI:
 		dc->out_ops = &tegra_dc_hdmi_ops;
 		break;
+#endif
 
 	case TEGRA_DC_OUT_DSI:
 		dc->out_ops = &tegra_dc_dsi_ops;
@@ -1918,7 +1958,7 @@ static void tegra_dc_vblank(struct work_struct *work)
 	tegra_dc_program_bandwidth(dc);
 
 	/* Update the SD brightness */
-	if (dc->enabled)
+	if (dc->enabled && dc->out->sd_settings)
 		nvsd_updated = nvsd_update_brightness(dc);
 
 	mutex_unlock(&dc->lock);
@@ -1956,12 +1996,12 @@ static void tegra_dc_underflow_handler(struct tegra_dc *dc)
 	if (!dc->underflow_mask) {
 		/* If we have no underflow to check, go ahead
 		   and disable the interrupt */
-		val = tegra_dc_readl(dc, DC_CMD_INT_ENABLE);
+		val = tegra_dc_readl(dc, DC_CMD_INT_MASK);
 		if (dc->out->flags & TEGRA_DC_OUT_ONE_SHOT_MODE)
 			val &= ~FRAME_END_INT;
 		else
 			val &= ~V_BLANK_INT;
-		tegra_dc_writel(dc, val, DC_CMD_INT_ENABLE);
+		tegra_dc_writel(dc, val, DC_CMD_INT_MASK);
 	}
 
 	/* Clear the underflow mask now that we've checked it. */
@@ -1992,22 +2032,18 @@ static void tegra_dc_trigger_windows(struct tegra_dc *dc)
 	}
 
 	if (!dirty) {
-		val = tegra_dc_readl(dc, DC_CMD_INT_ENABLE);
+		val = tegra_dc_readl(dc, DC_CMD_INT_MASK);
 		if (dc->out->flags & TEGRA_DC_OUT_ONE_SHOT_MODE)
 			val &= ~V_BLANK_INT;
 		else
 			val &= ~FRAME_END_INT;
-		tegra_dc_writel(dc, val, DC_CMD_INT_ENABLE);
+		tegra_dc_writel(dc, val, DC_CMD_INT_MASK);
 	}
 
 	if (completed) {
 		if (!dirty) {
 			/* With the last completed window, go ahead
 			   and enable the vblank interrupt for nvsd. */
-			val = tegra_dc_readl(dc, DC_CMD_INT_ENABLE);
-			val |= V_BLANK_INT;
-			tegra_dc_writel(dc, val, DC_CMD_INT_ENABLE);
-
 			val = tegra_dc_readl(dc, DC_CMD_INT_MASK);
 			val |= V_BLANK_INT;
 			tegra_dc_writel(dc, val, DC_CMD_INT_MASK);
@@ -2025,15 +2061,16 @@ static void tegra_dc_one_shot_irq(struct tegra_dc *dc, unsigned long status)
 
 		/* Schedule any additional bottom-half vblank actvities. */
 		schedule_work(&dc->vblank_work);
-
-		/* Mark the vblank as complete. */
-		complete(&dc->vblank_complete);
-
 	}
 
 	/* Check underflow at frame end */
-	if (status & FRAME_END_INT)
+	if (status & FRAME_END_INT) {
 		tegra_dc_underflow_handler(dc);
+
+		/* Mark the frame_end as complete. */
+		if (completion_done(&dc->frame_end_complete))
+			complete(&dc->frame_end_complete);
+	}
 }
 
 static void tegra_dc_continuous_irq(struct tegra_dc *dc, unsigned long status)
@@ -2044,13 +2081,15 @@ static void tegra_dc_continuous_irq(struct tegra_dc *dc, unsigned long status)
 
 		/* Schedule any additional bottom-half vblank actvities. */
 		schedule_work(&dc->vblank_work);
-
-		/* Mark the vblank as complete. */
-		complete(&dc->vblank_complete);
 	}
 
-	if (status & FRAME_END_INT)
+	if (status & FRAME_END_INT) {
+		/* Mark the frame_end as complete. */
+		if (completion_done(&dc->frame_end_complete))
+			complete(&dc->frame_end_complete);
+
 		tegra_dc_trigger_windows(dc);
+	}
 }
 #endif
 
@@ -2092,9 +2131,9 @@ static irqreturn_t tegra_dc_irq(int irq, void *ptr)
 	underflow_mask = status & ALL_UF_INT;
 
 	if (underflow_mask) {
-		val = tegra_dc_readl(dc, DC_CMD_INT_ENABLE);
+		val = tegra_dc_readl(dc, DC_CMD_INT_MASK);
 		val |= V_BLANK_INT;
-		tegra_dc_writel(dc, val, DC_CMD_INT_ENABLE);
+		tegra_dc_writel(dc, val, DC_CMD_INT_MASK);
 		dc->underflow_mask |= underflow_mask;
 		dc->stats.underflows++;
 		if (status & WIN_A_UF_INT)
@@ -2262,10 +2301,10 @@ static void tegra_dc_init(struct tegra_dc *dc)
 	tegra_dc_writel(dc, 0x00202020, DC_DISP_MEM_HIGH_PRIORITY);
 	tegra_dc_writel(dc, 0x00010101, DC_DISP_MEM_HIGH_PRIORITY_TIMER);
 
-	tegra_dc_writel(dc, (FRAME_END_INT |
-			     V_BLANK_INT |
-			     ALL_UF_INT), DC_CMD_INT_MASK);
-	tegra_dc_writel(dc, ALL_UF_INT, DC_CMD_INT_ENABLE);
+	/* enable interrupts for vblank, frame_end and underflows */
+	tegra_dc_writel(dc, (FRAME_END_INT | V_BLANK_INT | ALL_UF_INT),
+		DC_CMD_INT_ENABLE);
+	tegra_dc_writel(dc, ALL_UF_INT, DC_CMD_INT_MASK);
 
 	tegra_dc_writel(dc, 0x00000000, DC_DISP_BORDER_COLOR);
 
@@ -2274,9 +2313,7 @@ static void tegra_dc_init(struct tegra_dc *dc)
 		struct tegra_dc_win *win = &dc->windows[i];
 		tegra_dc_writel(dc, WINDOW_A_SELECT << i,
 				DC_CMD_DISPLAY_WINDOW_HEADER);
-		tegra_dc_init_csc_defaults(&win->csc);
 		tegra_dc_set_csc(dc, &win->csc);
-		tegra_dc_init_lut_defaults(&win->lut);
 		tegra_dc_set_lut(dc, win);
 		tegra_dc_set_scaling_filter(dc);
 	}
@@ -2307,7 +2344,6 @@ static bool _tegra_dc_controller_enable(struct tegra_dc *dc)
 		dc->out->enable();
 
 	tegra_dc_setup_clk(dc, dc->clk);
-	tegra_periph_reset_assert(dc->clk);
 	clk_enable(dc->clk);
 	clk_enable(dc->emc_clk);
 
@@ -2321,10 +2357,6 @@ static bool _tegra_dc_controller_enable(struct tegra_dc *dc)
 
 	if (dc->out_ops && dc->out_ops->enable)
 		dc->out_ops->enable(dc);
-
-	if (dc->out->out_pins)
-		tegra_dc_set_out_pin_polars(dc, dc->out->out_pins,
-					    dc->out->n_out_pins);
 
 	if (dc->out->postpoweron)
 		dc->out->postpoweron();
@@ -2378,10 +2410,6 @@ static bool _tegra_dc_controller_reset_enable(struct tegra_dc *dc)
 	if (dc->out_ops && dc->out_ops->enable)
 		dc->out_ops->enable(dc);
 
-	if (dc->out->out_pins)
-		tegra_dc_set_out_pin_polars(dc, dc->out->out_pins,
-					    dc->out->n_out_pins);
-
 	if (dc->out->postpoweron)
 		dc->out->postpoweron();
 
@@ -2419,6 +2447,8 @@ static void _tegra_dc_controller_disable(struct tegra_dc *dc)
 {
 	unsigned i;
 
+	tegra_dc_writel(dc, 0, DC_CMD_INT_MASK);
+	tegra_dc_writel(dc, 0, DC_CMD_INT_ENABLE);
 	disable_irq(dc->irq);
 
 	if (dc->out_ops && dc->out_ops->disable)
@@ -2674,17 +2704,22 @@ static int tegra_dc_probe(struct nvhost_device *ndev)
 		dc->enabled = true;
 
 	mutex_init(&dc->lock);
-	init_completion(&dc->vblank_complete);
+	init_completion(&dc->frame_end_complete);
 	init_waitqueue_head(&dc->wq);
 #ifdef CONFIG_ARCH_TEGRA_2x_SOC
 	INIT_WORK(&dc->reset_work, tegra_dc_reset_worker);
 #endif
 	INIT_WORK(&dc->vblank_work, tegra_dc_vblank);
 
+	tegra_dc_init_lut_defaults(&dc->fb_lut);
+
 	dc->n_windows = DC_N_WINDOWS;
 	for (i = 0; i < dc->n_windows; i++) {
-		dc->windows[i].idx = i;
-		dc->windows[i].dc = dc;
+		struct tegra_dc_win *win = &dc->windows[i];
+		win->idx = i;
+		win->dc = dc;
+		tegra_dc_init_csc_defaults(&win->csc);
+		tegra_dc_init_lut_defaults(&win->lut);
 	}
 
 	ret = tegra_dc_set(dc, ndev->id);

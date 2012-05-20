@@ -26,6 +26,7 @@
 #include <linux/gpio.h>
 #include <linux/gpio_keys.h>
 #include <linux/mfd/tps6591x.h>
+#include <linux/mfd/max77663-core.h>
 #include <linux/interrupt_keys.h>
 #include <linux/gpio_scrollwheel.h>
 
@@ -37,25 +38,25 @@
 #include "board-cardhu.h"
 
 #include "gpio-names.h"
+#include "devices.h"
 
-#define CARDHU_ROW_COUNT	4
-#define CARDHU_COL_COUNT	2
 #define CARDHU_PM269_ROW_COUNT	2
 #define CARDHU_PM269_COL_COUNT	4
 
-#if 0
-static int plain_kbd_keycode[] = {
-	KEY_POWER,	KEY_RESERVED,
-	KEY_HOME,	KEY_BACK,
-	KEY_CAMERA,	KEY_CAMERA,
-	KEY_VOLUMEDOWN,	KEY_VOLUMEUP
-};
+static const u32 kbd_keymap[] = {
+	KEY(0, 0, KEY_POWER),
+	KEY(0, 1, KEY_RESERVED),
+	KEY(0, 2, KEY_VOLUMEUP),
+	KEY(0, 3, KEY_VOLUMEDOWN),
 
-static int plain_kbd_keycode_pm269[] = {
-	KEY_POWER,	KEY_RESERVED,
-	KEY_VOLUMEUP,	KEY_VOLUMEDOWN,
-	KEY_HOME,	KEY_MENU,
-	KEY_BACK,	KEY_SEARCH
+	KEY(1, 0, KEY_HOME),
+	KEY(1, 1, KEY_MENU),
+	KEY(1, 2, KEY_BACK),
+	KEY(1, 3, KEY_SEARCH),
+};
+static const struct matrix_keymap_data keymap_data = {
+	.keymap	 = kbd_keymap,
+	.keymap_size    = ARRAY_SIZE(kbd_keymap),
 };
 
 static struct tegra_kbc_wake_key cardhu_wake_cfg[] = {
@@ -67,37 +68,12 @@ static struct tegra_kbc_wake_key cardhu_wake_cfg[] = {
 
 static struct tegra_kbc_platform_data cardhu_kbc_platform_data = {
 	.debounce_cnt = 20,
-	.repeat_cnt = 50 * 32,
-	.scan_timeout_cnt = 3000 * 32,
-	.plain_keycode = plain_kbd_keycode,
-	.fn_keycode = NULL,
-	.is_filter_keys = false,
-	.is_wake_on_any_key = false,
-	.wake_key_cnt = 1,
+	.repeat_cnt = 1,
+	.scan_count = 30,
+	.wakeup = true,
+	.keymap_data = &keymap_data,
+	.wake_cnt = 1,
 	.wake_cfg = &cardhu_wake_cfg[0],
-};
-
-static struct resource cardhu_kbc_resources[] = {
-	[0] = {
-		.start = TEGRA_KBC_BASE,
-		.end   = TEGRA_KBC_BASE + TEGRA_KBC_SIZE - 1,
-		.flags = IORESOURCE_MEM,
-	},
-	[1] = {
-		.start = INT_KBC,
-		.end   = INT_KBC,
-		.flags = IORESOURCE_IRQ,
-	},
-};
-
-struct platform_device cardhu_kbc_device = {
-	.name = "tegra-kbc",
-	.id = -1,
-	.dev = {
-		.platform_data = &cardhu_kbc_platform_data,
-	},
-	.resource = cardhu_kbc_resources,
-	.num_resources = ARRAY_SIZE(cardhu_kbc_resources),
 };
 
 int __init cardhu_kbc_init(void)
@@ -105,48 +81,28 @@ int __init cardhu_kbc_init(void)
 	struct tegra_kbc_platform_data *data = &cardhu_kbc_platform_data;
 	int i;
 	struct board_info board_info;
-	int row_count = CARDHU_ROW_COUNT, col_count = CARDHU_COL_COUNT;
 
 	tegra_get_board_info(&board_info);
-
 	if ((board_info.board_id == BOARD_E1198) ||
 			(board_info.board_id == BOARD_E1291))
 		return 0;
 
-	if ((board_info.board_id == BOARD_PM269) ||
-		(board_info.board_id == BOARD_E1257) ||
-		(board_info.board_id == BOARD_PM305) ||
-		(board_info.board_id == BOARD_PM311)) {
-		cardhu_kbc_platform_data.plain_keycode = plain_kbd_keycode_pm269;
-		row_count = CARDHU_PM269_ROW_COUNT;
-		col_count = CARDHU_PM269_COL_COUNT;
-	}
-
 	pr_info("Registering tegra-kbc\n");
-	 /* Setup the pin configuration information. */
-	for (i = 0; i < KBC_MAX_GPIO; i++) {
-		data->pin_cfg[i].num = 0;
-		data->pin_cfg[i].pin_type = kbc_pin_unused;
-	}
-	for (i = 0; i < row_count; i++) {
+	tegra_kbc_device.dev.platform_data = &cardhu_kbc_platform_data;
+
+	for (i = 0; i < CARDHU_PM269_ROW_COUNT; i++) {
 		data->pin_cfg[i].num = i;
-		data->pin_cfg[i].pin_type = kbc_pin_row;
+		data->pin_cfg[i].is_row = true;
+		data->pin_cfg[i].en = true;
 	}
-	for (i = 0; i < col_count; i++) {
-		data->pin_cfg[i + row_count].num = i;
-		data->pin_cfg[i + row_count].pin_type = kbc_pin_col;
+	for (i = 0; i < CARDHU_PM269_COL_COUNT; i++) {
+		data->pin_cfg[i + KBC_PIN_GPIO_16].num = i;
+		data->pin_cfg[i + KBC_PIN_GPIO_16].en = true;
 	}
 
-	platform_device_register(&cardhu_kbc_device);
-
+	platform_device_register(&tegra_kbc_device);
 	return 0;
 }
-#else
-int __init cardhu_kbc_init(void)
-{
-	return 0;
-}
-#endif
 
 int __init cardhu_scroll_init(void)
 {
@@ -196,6 +152,15 @@ static struct gpio_keys_button cardhu_keys_e1291[] = {
 	[5] = GPIO_KEY(KEY_VOLUMEDOWN, PQ1, 0),
 };
 
+static struct gpio_keys_button cardhu_keys_e1291_a04[] = {
+	[0] = GPIO_KEY(KEY_MENU, PR0, 0),
+	[1] = GPIO_KEY(KEY_BACK, PR1, 0),
+	[2] = GPIO_KEY(KEY_HOME, PQ2, 0),
+	[3] = GPIO_KEY(KEY_SEARCH, PQ3, 0),
+	[4] = GPIO_KEY(KEY_VOLUMEUP, PQ0, 0),
+	[5] = GPIO_KEY(KEY_VOLUMEDOWN, PQ1, 0),
+};
+
 static struct gpio_keys_platform_data cardhu_keys_e1291_platform_data = {
 	.buttons	= cardhu_keys_e1291,
 	.nbuttons	= ARRAY_SIZE(cardhu_keys_e1291),
@@ -221,7 +186,15 @@ static struct platform_device cardhu_keys_e1291_device = {
 	}
 static struct interrupt_keys_button cardhu_int_keys[] = {
 	[0] = INT_KEY(KEY_POWER, TPS6591X_IRQ_BASE + TPS6591X_INT_PWRON, 0, 100),
-	[1] = INT_KEY(KEY_POWER, TPS6591X_IRQ_BASE + TPS6591X_INT_PWRON_LP, 0, 8000),
+};
+
+static struct interrupt_keys_button cardhu_pm298_int_keys[] = {
+	[0] = INT_KEY(KEY_POWER, MAX77663_IRQ_BASE + MAX77663_IRQ_ONOFF_EN0_FALLING, 0, 100),
+	[1] = INT_KEY(KEY_POWER, MAX77663_IRQ_BASE + MAX77663_IRQ_ONOFF_EN0_1SEC, 0, 3000),
+};
+
+static struct interrupt_keys_button cardhu_pm299_int_keys[] = {
+	[0] = INT_KEY(KEY_POWER, RICOH583_IRQ_BASE + RICOH583_IRQ_ONKEY, 0, 100),
 };
 
 static struct interrupt_keys_platform_data cardhu_int_keys_pdata = {
@@ -241,10 +214,12 @@ int __init cardhu_keys_init(void)
 {
 	int i;
 	struct board_info board_info;
+	struct board_info pmu_board_info;
 
 	tegra_get_board_info(&board_info);
 	if (!((board_info.board_id == BOARD_E1198) ||
 		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_E1186) ||
 		(board_info.board_id == BOARD_E1257) ||
 		(board_info.board_id == BOARD_PM305) ||
 		(board_info.board_id == BOARD_PM311) ||
@@ -254,9 +229,17 @@ int __init cardhu_keys_init(void)
 	pr_info("Registering gpio keys\n");
 
 	if (board_info.board_id == BOARD_E1291) {
+		if (board_info.fab >= BOARD_FAB_A04) {
+			cardhu_keys_e1291_platform_data.buttons =
+					cardhu_keys_e1291_a04;
+			cardhu_keys_e1291_platform_data.nbuttons =
+					ARRAY_SIZE(cardhu_keys_e1291_a04);
+		}
+
 		/* Enable gpio mode for other pins */
-		for (i = 0; i < ARRAY_SIZE(cardhu_keys_e1291); i++)
-			tegra_gpio_enable(cardhu_keys_e1291[i].gpio);
+		for (i = 0; i < cardhu_keys_e1291_platform_data.nbuttons; i++)
+			tegra_gpio_enable(cardhu_keys_e1291_platform_data.
+						buttons[i].gpio);
 
 		platform_device_register(&cardhu_keys_e1291_device);
 	} else if (board_info.board_id == BOARD_E1198) {
@@ -268,8 +251,24 @@ int __init cardhu_keys_init(void)
 	}
 
 	/* Register on-key through pmu interrupt */
+	tegra_get_pmu_board_info(&pmu_board_info);
+
+	if (pmu_board_info.board_id == BOARD_PMU_PM298) {
+		cardhu_int_keys_pdata.int_buttons = cardhu_pm298_int_keys;
+		cardhu_int_keys_pdata.nbuttons =
+					ARRAY_SIZE(cardhu_pm298_int_keys);
+	}
+
+	if (pmu_board_info.board_id == BOARD_PMU_PM299) {
+		cardhu_int_keys_pdata.int_buttons = cardhu_pm299_int_keys;
+		cardhu_int_keys_pdata.nbuttons =
+					ARRAY_SIZE(cardhu_pm299_int_keys);
+	}
+
 	if ((board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_E1198) ||
 		(board_info.board_id == BOARD_E1257) ||
+		(board_info.board_id == BOARD_E1186) ||
 		(board_info.board_id == BOARD_PM305) ||
 		(board_info.board_id == BOARD_PM311) ||
 		(board_info.board_id == BOARD_PM269))

@@ -31,8 +31,9 @@ int whistler_emc_init(void);
 #define MAX8907C_INT_END        (MAX8907C_INT_BASE + 31)
 
 /* Audio-related GPIOs */
-#define WHISTLER_GPIO_WM8753(_x_)	(MAX8907C_INT_END + 1 + (_x_))
-#define TEGRA_GPIO_SPKR_EN		WHISTLER_GPIO_WM8753(2)
 #define TEGRA_GPIO_HP_DET		TEGRA_GPIO_PW3
+
+/* TCA6416 GPIO expander */
+#define TCA6416_GPIO_BASE		(TEGRA_NR_GPIOS)
 
 #endif

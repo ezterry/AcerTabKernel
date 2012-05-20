@@ -70,4 +70,10 @@ config EEPROM_93CX6
 
 	  If unsure, say N.
 
+config EEPROM_AT24C02C
+	tristate "EEPROM AT24C02C support"
+	default n
+	help
+	  None
+
 endmenu

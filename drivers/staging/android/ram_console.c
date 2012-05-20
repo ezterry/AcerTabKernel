@@ -221,6 +221,19 @@ ram_console_save_old(struct ram_console_buffer *buffer, char *dest)
 #endif
 }
 
+#ifdef CONFIG_ANDROID_RAM_CONSOLE_DEBUG_CONSOLE_SUSPENDED
+static int ram_panic_event(struct notifier_block *this,
+	unsigned long event, void *ptr)
+{
+	resume_console();
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block ram_panic_blk = {
+	.notifier_call = ram_panic_event,
+};
+#endif
+
 static int __init ram_console_init(struct ram_console_buffer *buffer,
 				   size_t buffer_size, char *old_buf)
 {
@@ -303,6 +316,10 @@ static int __init ram_console_init(struct ram_console_buffer *buffer,
 	register_console(&ram_console);
 #ifdef CONFIG_ANDROID_RAM_CONSOLE_ENABLE_VERBOSE
 	console_verbose();
+#endif
+#ifdef CONFIG_ANDROID_RAM_CONSOLE_DEBUG_CONSOLE_SUSPENDED
+	atomic_notifier_chain_register(&panic_notifier_list,
+				   &ram_panic_blk);
 #endif
 	return 0;
 }

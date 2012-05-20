@@ -250,6 +250,27 @@ static struct resource spi_resource6[] = {
 };
 #endif
 
+#ifndef CONFIG_ARCH_TEGRA_2x_SOC
+static struct resource dtv_resource[] = {
+	[0] = {
+		.start  = INT_DTV,
+		.end    = INT_DTV,
+		.flags  = IORESOURCE_IRQ,
+	},
+	[1] = {
+		.start  = TEGRA_DTV_BASE,
+		.end    = TEGRA_DTV_BASE + TEGRA_DTV_SIZE - 1,
+		.flags  = IORESOURCE_MEM,
+	},
+	[2] = {
+		.start	= TEGRA_DMA_REQ_SEL_DTV,
+		.end	= TEGRA_DMA_REQ_SEL_DTV,
+		.flags	= IORESOURCE_DMA
+	},
+};
+#endif
+
+
 struct platform_device tegra_spi_device1 = {
 	.name		= "spi_tegra",
 	.id		= 0,
@@ -372,7 +393,48 @@ struct platform_device tegra_spi_slave_device6 = {
 };
 #endif
 
+static struct resource resources_nor[] = {
+	[0] = {
+		.start = INT_SNOR,
+		.end = INT_SNOR,
+		.flags = IORESOURCE_IRQ,
+	},
+	[1] = {
+		/* Map SNOR Controller */
+		.start = TEGRA_SNOR_BASE,
+		.end = TEGRA_SNOR_BASE + TEGRA_SNOR_SIZE - 1,
+		.flags = IORESOURCE_MEM,
+	},
+	[2] = {
+		/* Map the size of flash */
+		.start = TEGRA_NOR_FLASH_BASE,
+		.end = TEGRA_NOR_FLASH_BASE + TEGRA_NOR_FLASH_SIZE - 1,
+		.flags = IORESOURCE_MEM,
+	}
+};
 
+struct platform_device tegra_nor_device = {
+	.name = "tegra-nor",
+	.id = -1,
+	.num_resources = ARRAY_SIZE(resources_nor),
+	.resource = resources_nor,
+	.dev = {
+		.coherent_dma_mask = 0xffffffff,
+	},
+};
+
+#ifndef CONFIG_ARCH_TEGRA_2x_SOC
+struct platform_device tegra_dtv_device = {
+	.name           = "tegra_dtv",
+	.id             = -1,
+	.resource       = dtv_resource,
+	.num_resources  = ARRAY_SIZE(dtv_resource),
+	.dev = {
+		.init_name = "dtv",
+		.coherent_dma_mask = 0xffffffff,
+	},
+};
+#endif
 
 static struct resource sdhci_resource1[] = {
 	[0] = {
@@ -423,6 +485,16 @@ static struct resource sdhci_resource4[] = {
 		.start	= TEGRA_SDMMC4_BASE,
 		.end	= TEGRA_SDMMC4_BASE + TEGRA_SDMMC4_SIZE-1,
 		.flags	= IORESOURCE_MEM,
+	},
+};
+
+struct platform_device tegra_pci_device = {
+	.name		= "tegra-pcie",
+	.id		= 0,
+	.resource	= 0,
+	.num_resources	= 0,
+	.dev = {
+		.platform_data = 0,
 	},
 };
 
@@ -991,25 +1063,57 @@ struct platform_device tegra_ahub_device = {
 	.resource	= ahub_resource,
 	.num_resources	= ARRAY_SIZE(ahub_resource),
 };
-#endif
 
-struct platform_device spdif_dit_device = {
-	.name = "spdif-dit",
-	.id = -1,
+static struct resource dam_resource0[] = {
+	[0] = {
+		.start = TEGRA_DAM0_BASE,
+		.end   = TEGRA_DAM0_BASE + TEGRA_DAM0_SIZE - 1,
+		.flags = IORESOURCE_MEM
+	}
 };
 
-struct platform_device tegra_pcm_device = {
-	.name = "tegra-pcm-audio",
-	.id = -1,
+struct platform_device tegra_dam_device0 = {
+	.name = "tegra30-dam",
+	.id = 0,
+	.resource      = dam_resource0,
+	.num_resources = ARRAY_SIZE(dam_resource0),
 };
 
-#if defined(CONFIG_SND_HDA_TEGRA)
+static struct resource dam_resource1[] = {
+	[0] = {
+		.start = TEGRA_DAM1_BASE,
+		.end   = TEGRA_DAM1_BASE + TEGRA_DAM1_SIZE - 1,
+		.flags = IORESOURCE_MEM
+	}
+};
+
+struct platform_device tegra_dam_device1 = {
+	.name = "tegra30-dam",
+	.id = 1,
+	.resource      = dam_resource1,
+	.num_resources = ARRAY_SIZE(dam_resource1),
+};
+
+static struct resource dam_resource2[] = {
+	[0] = {
+		.start = TEGRA_DAM2_BASE,
+		.end   = TEGRA_DAM2_BASE + TEGRA_DAM2_SIZE - 1,
+		.flags = IORESOURCE_MEM
+	}
+};
+
+struct platform_device tegra_dam_device2 = {
+	.name = "tegra30-dam",
+	.id = 2,
+	.resource      = dam_resource2,
+	.num_resources = ARRAY_SIZE(dam_resource2),
+};
+
 static u64 tegra_hda_dma_mask = DMA_BIT_MASK(32);
-
-static struct resource tegra_hda_resources[] = {
+static struct resource hda_platform_resources[] = {
 	[0] = {
 		.start	= TEGRA_HDA_BASE,
-		.end	= TEGRA_HDA_BASE + TEGRA_HDA_SIZE - 1 ,
+		.end	= TEGRA_HDA_BASE + TEGRA_HDA_SIZE - 1,
 		.flags	= IORESOURCE_MEM
 	},
 	[1] = {
@@ -1020,16 +1124,36 @@ static struct resource tegra_hda_resources[] = {
 };
 
 struct platform_device tegra_hda_device = {
-	.name		= "tegra-hda",
-	.id		= 0,
+	.name		= "tegra30-hda",
+	.id		= -1,
 	.dev = {
 		.coherent_dma_mask	= DMA_BIT_MASK(32),
 		.dma_mask		= &tegra_hda_dma_mask,
 	},
-	.resource	= tegra_hda_resources,
-	.num_resources	= ARRAY_SIZE(tegra_hda_resources),
+	.resource	= hda_platform_resources,
+	.num_resources	= ARRAY_SIZE(hda_platform_resources),
 };
 #endif
+
+struct platform_device spdif_dit_device = {
+	.name = "spdif-dit",
+	.id = 0,
+};
+
+struct platform_device bluetooth_dit_device = {
+	.name = "spdif-dit",
+	.id = 1,
+};
+
+struct platform_device baseband_dit_device = {
+	.name = "spdif-dit",
+	.id = 2,
+};
+
+struct platform_device tegra_pcm_device = {
+	.name = "tegra-pcm-audio",
+	.id = -1,
+};
 
 static struct resource w1_resources[] = {
 	[0] = {
@@ -1140,8 +1264,8 @@ struct platform_device tegra_sata_device = {
 #ifdef CONFIG_ARCH_TEGRA_2x_SOC
 static struct resource das_resource[] = {
 	[0] = {
-		.start	= TEGRA_APB_MISC_BASE,
-		.end	= TEGRA_APB_MISC_BASE + TEGRA_APB_MISC_SIZE - 1,
+		.start	= TEGRA_APB_MISC_DAS_BASE,
+		.end	= TEGRA_APB_MISC_DAS_BASE + TEGRA_APB_MISC_DAS_SIZE - 1,
 		.flags	= IORESOURCE_MEM
 	}
 };

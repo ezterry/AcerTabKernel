@@ -33,4 +33,8 @@ struct tegra_emc_chip {
 	int table_size;
 };
 
+#if defined(CONFIG_ARCH_ACER_T20)
+void tegra_init_emc(const struct tegra_emc_table *table, int table_size);
+#else
 void tegra_init_emc(const struct tegra_emc_chip *chips, int chips_size);
+#endif

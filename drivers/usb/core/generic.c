@@ -21,6 +21,13 @@
 #include <linux/usb/hcd.h>
 #include "usb.h"
 
+#if defined(CONFIG_ARCH_ACER_T30)
+#include "../../../../arch/arm/mach-tegra/gpio-names.h"
+#include <linux/gpio.h>
+#define AC_DETECT_GPIO TEGRA_GPIO_PO4
+#endif
+
+
 static inline const char *plural(int n)
 {
 	return (n == 1 ? "" : "s");
@@ -95,13 +102,21 @@ int usb_choose_configuration(struct usb_device *udev)
 		 * cause us to reject configurations that we should have
 		 * accepted.
 		 */
-
+#if defined(CONFIG_ARCH_ACER_T30)
+		if(!gpio_get_value(AC_DETECT_GPIO)) {
+			/* Rule out configs that draw too much bus current */
+			if (c->desc.bMaxPower * 2 > udev->bus_mA) {
+				insufficient_power++;
+				continue;
+			}
+		}
+#else
 		/* Rule out configs that draw too much bus current */
 		if (c->desc.bMaxPower * 2 > udev->bus_mA) {
 			insufficient_power++;
 			continue;
 		}
-
+#endif
 		/* When the first config's first interface is one of Microsoft's
 		 * pet nonstandard Ethernet-over-USB protocols, ignore it unless
 		 * this kernel has enabled the necessary host side driver.

@@ -28,6 +28,8 @@
 #include <linux/tps80031-charger.h>
 #include <linux/gpio.h>
 #include <linux/io.h>
+#include <linux/cpumask.h>
+#include <linux/platform_data/tegra_bpc_mgmt.h>
 
 #include <mach/edp.h>
 #include <mach/iomap.h>
@@ -43,6 +45,9 @@
 
 #define PMC_CTRL		0x0
 #define PMC_CTRL_INTR_LOW	(1 << 17)
+
+#define PMC_DPD_PADS_ORIDE		0x01c
+#define PMC_DPD_PADS_ORIDE_BLINK	(1 << 20)
 
 /************************ TPS80031 based regulator ****************/
 static struct regulator_consumer_supply tps80031_vio_supply[] = {
@@ -156,7 +161,7 @@ static struct regulator_consumer_supply tps80031_battery_charge_supply[] = {
 
 #define TPS_PDATA_INIT(_id, _minmv, _maxmv, _supply_reg, _always_on,	\
 	_boot_on, _apply_uv, _init_uV, _init_enable, _init_apply, 	\
-	_flags, _delay)							\
+	_flags, _ectrl, _delay)						\
 	static struct tps80031_regulator_platform_data pdata_##_id = {	\
 		.regulator = {						\
 			.constraints = {				\
@@ -180,25 +185,26 @@ static struct regulator_consumer_supply tps80031_battery_charge_supply[] = {
 		.init_enable = _init_enable,				\
 		.init_apply = _init_apply,				\
 		.flags = _flags,					\
+		.ext_ctrl_flag = _ectrl,				\
 		.delay_us = _delay,					\
 	}
 
-TPS_PDATA_INIT(vio,   600, 2100, 0, 1, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(smps1, 600, 2100, 0, 0, 0, 0, -1, 0, 0, PWR_REQ_INPUT_PREQ2, 0);
-TPS_PDATA_INIT(smps2, 600, 2100, 0, 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(smps3, 600, 2100, 0, 1, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(smps4, 600, 2100, 0, 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(ldo1, 1000, 3300, tps80031_rails(VIO), 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(ldo2, 1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(ldo3, 1000, 3300, tps80031_rails(VIO), 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(ldo4, 1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(ldo5, 1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(ldo6, 1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(ldo7, 1000, 3300, tps80031_rails(VIO), 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(ldoln, 1000, 3300, tps80031_rails(SMPS3), 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(ldousb, 1000, 3300, 0, 0, 0, 0, -1, 0, 0, USBLDO_INPUT_VSYS, 0);
-TPS_PDATA_INIT(vana,  1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0);
-TPS_PDATA_INIT(vbus,  0, 5000, 0, 0, 0, 0, -1, 0, 0, (VBUS_SW_ONLY | VBUS_DISCHRG_EN_PDN), 100000);
+TPS_PDATA_INIT(vio,   600, 2100, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0);
+TPS_PDATA_INIT(smps1, 600, 2100, 0, 0, 0, 0, -1, 0, 0, 0, PWR_REQ_INPUT_PREQ2 | PWR_OFF_ON_SLEEP, 0);
+TPS_PDATA_INIT(smps2, 600, 2100, 0, 0, 0, 0, -1, 0, 0, 0, PWR_REQ_INPUT_PREQ1, 0);
+TPS_PDATA_INIT(smps3, 600, 2100, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0);
+TPS_PDATA_INIT(smps4, 600, 2100, 0, 0, 0, 0, -1, 0, 0, 0, PWR_REQ_INPUT_PREQ1, 0);
+TPS_PDATA_INIT(ldo1, 1000, 3300, tps80031_rails(VIO), 0, 0, 0, -1, 0, 0, 0, 0, 0);
+TPS_PDATA_INIT(ldo2, 1000, 3300, 0, 1, 1, 1, 1000, 1, 1, 0, 0, 0);
+TPS_PDATA_INIT(ldo3, 1000, 3300, tps80031_rails(VIO), 0, 0, 0, -1, 0, 0, 0, PWR_OFF_ON_SLEEP, 0);
+TPS_PDATA_INIT(ldo4, 1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0);
+TPS_PDATA_INIT(ldo5, 1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0);
+TPS_PDATA_INIT(ldo6, 1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, PWR_REQ_INPUT_PREQ1, 0);
+TPS_PDATA_INIT(ldo7, 1000, 3300, tps80031_rails(VIO), 0, 0, 0, -1, 0, 0, 0, PWR_REQ_INPUT_PREQ1, 0);
+TPS_PDATA_INIT(ldoln, 1000, 3300, tps80031_rails(SMPS3), 0, 0, 0, -1, 0, 0, 0, PWR_REQ_INPUT_PREQ1, 0);
+TPS_PDATA_INIT(ldousb, 1000, 3300, 0, 0, 0, 0, -1, 0, 0, USBLDO_INPUT_VSYS, PWR_OFF_ON_SLEEP, 0);
+TPS_PDATA_INIT(vana,  1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0);
+TPS_PDATA_INIT(vbus,  0, 5000, 0, 0, 0, 0, -1, 0, 0, (VBUS_SW_ONLY | VBUS_DISCHRG_EN_PDN), 0, 100000);
 
 static struct tps80031_rtc_platform_data rtc_data = {
 	.irq = ENT_TPS80031_IRQ_BASE + TPS80031_INT_RTC_ALARM,
@@ -239,6 +245,7 @@ static struct tps80031_charger_platform_data bcharger_pdata = {
 
 static struct tps80031_bg_platform_data battery_gauge_data = {
 	.irq_base = ENT_TPS80031_IRQ_BASE,
+	.battery_present = 1,
 };
 
 #define TPS_RTC()				\
@@ -264,6 +271,10 @@ static struct tps80031_bg_platform_data battery_gauge_data = {
 		.name   = "tps80031-battery-gauge",	\
 		.platform_data = &battery_gauge_data,	\
 	}
+#define TPS_GPADC()					\
+	{						\
+		.name	= "tps80031-gpadc",		\
+	}
 
 static struct tps80031_subdev_info tps80031_devs[] = {
 	TPS_REG(VIO, vio),
@@ -285,18 +296,29 @@ static struct tps80031_subdev_info tps80031_devs[] = {
 	TPS_RTC(),
 	TPS_BATTERY(),
 	TPS_BATTERY_GAUGE(),
+	TPS_GPADC(),
 };
 
-struct tps80031_32kclock_plat_data clk32k_pdata = {
-	.en_clk32kg = 1,
-	.en_clk32kaudio = 1,
+struct tps80031_clk32k_init_data clk32k_idata[] = {
+	{
+		.clk32k_nr = TPS80031_CLOCK32K_G,
+		.enable = true,
+		.ext_ctrl_flag = PWR_REQ_INPUT_PREQ1,
+	},
+	{
+		.clk32k_nr = TPS80031_CLOCK32K_AUDIO,
+		.enable = true,
+		.ext_ctrl_flag = PWR_REQ_INPUT_PREQ1,
+	},
 };
+
 static struct tps80031_platform_data tps_platform = {
 	.num_subdevs	= ARRAY_SIZE(tps80031_devs),
 	.subdevs	= tps80031_devs,
 	.irq_base	= ENT_TPS80031_IRQ_BASE,
 	.gpio_base	= ENT_TPS80031_GPIO_BASE,
-	.clk32k_pdata	= &clk32k_pdata,
+	.clk32k_init_data	= clk32k_idata,
+	.clk32k_init_data_size	= ARRAY_SIZE(clk32k_idata),
 };
 
 static struct i2c_board_info __initdata enterprise_regulators[] = {
@@ -367,6 +389,7 @@ static int gpio_switch_cam_ldo_2v8_en_voltages[] = {2800};
 /* 2-0036 is dev_name of ar0832 in Enterprise A01*/
 /* 2-0032 is alternative dev_name of ar0832 Enterprise A01*/
 /* 2-0010 is dev_name of ov9726 */
+/* 2-0033 is dev_name of tps61050 */
 /* 2-0070 is dev_name of PCA9546 in Enterprise A02*/
 /* 6-0036 is dev_name of ar0832 in Enterprise A02 */
 /* 7-0036 is dev_name of ar0832 in Enterprise A02 */
@@ -375,6 +398,7 @@ static struct regulator_consumer_supply gpio_switch_cam_ldo_1v8_en_supply[] = {
 	REGULATOR_SUPPLY("vdd", "2-0032"),
 	REGULATOR_SUPPLY("dovdd", "2-0010"),
 	REGULATOR_SUPPLY("vdd_1v8_cam", NULL),
+	REGULATOR_SUPPLY("vdd_i2c", "2-0033"),
 	REGULATOR_SUPPLY("vcc_i2c", "2-0070"),
 	REGULATOR_SUPPLY("vdd", "6-0036"),
 	REGULATOR_SUPPLY("vdd", "7-0036"),
@@ -473,7 +497,7 @@ int __init enterprise_regulator_init(void)
 {
 	void __iomem *pmc = IO_ADDRESS(TEGRA_PMC_BASE);
 	u32 pmc_ctrl;
-	struct board_info board_info;
+	u32 pmc_dpd_pads;
 
 	/* configure the power management controller to trigger PMU
 	 * interrupts when low */
@@ -481,13 +505,14 @@ int __init enterprise_regulator_init(void)
 	pmc_ctrl = readl(pmc + PMC_CTRL);
 	writel(pmc_ctrl | PMC_CTRL_INTR_LOW, pmc + PMC_CTRL);
 
-	tegra_get_board_info(&board_info);
+	pmc_dpd_pads = readl(pmc + PMC_DPD_PADS_ORIDE);
+	writel(pmc_dpd_pads & ~PMC_DPD_PADS_ORIDE_BLINK , pmc + PMC_DPD_PADS_ORIDE);
 
-	/* Disable battery charging for board whose sku does not
-	   have battery support */
-	if (!(board_info.sku & SKU_BATTERY_SUPPORT)) {
+	/* Disable battery charging if power adapter is connected. */
+	if (get_power_supply_type() == POWER_SUPPLY_TYPE_MAINS) {
 		bcharger_pdata.num_consumer_supplies = 0;
 		bcharger_pdata.consumer_supplies = NULL;
+		battery_gauge_data.battery_present = 0;
 	}
 
 	i2c_register_board_info(4, enterprise_regulators, 1);
@@ -512,7 +537,7 @@ static void enterprise_board_resume(int lp_state, enum resume_stage stg)
 static struct tegra_suspend_platform_data enterprise_suspend_data = {
 	.cpu_timer	= 2000,
 	.cpu_off_timer	= 200,
-	.suspend_mode	= TEGRA_SUSPEND_LP1,
+	.suspend_mode	= TEGRA_SUSPEND_LP0,
 	.core_timer	= 0x7e7e,
 	.core_off_timer = 0,
 	.corereq_high	= true,
@@ -525,8 +550,13 @@ static void enterprise_init_deep_sleep_mode(void)
 {
 	struct board_info bi;
 	tegra_get_board_info(&bi);
-	if (bi.board_id == BOARD_1205 && bi.fab == ENTERPRISE_FAB_A01)
+
+	if (bi.board_id == BOARD_E1205 && bi.fab == BOARD_FAB_A01)
 		enterprise_suspend_data.suspend_mode = TEGRA_SUSPEND_LP1;
+
+	if ((bi.board_id == BOARD_E1205 && (bi.sku & BOARD_SKU_VF_BIT) == 0) ||
+	    (bi.board_id == BOARD_E1197 && (bi.sku & BOARD_SKU_VF_BIT)))
+		enterprise_suspend_data.cpu_timer = 8000;
 }
 
 int __init enterprise_suspend_init(void)
@@ -540,7 +570,48 @@ int __init enterprise_suspend_init(void)
 
 int __init enterprise_edp_init(void)
 {
-	tegra_init_cpu_edp_limits(2500); /* 2.5A regulator */
+	unsigned int regulator_mA;
+
+	regulator_mA = get_maximum_cpu_current_supported();
+	if (!regulator_mA) {
+		regulator_mA = 2500; /* regular AP30 */
+	}
+	pr_info("%s: CPU regulator %d mA\n", __func__, regulator_mA);
+
+	tegra_init_cpu_edp_limits(regulator_mA);
+	tegra_init_system_edp_limits(TEGRA_BPC_CPU_PWR_LIMIT);
 	return 0;
 }
 #endif
+
+static struct tegra_bpc_mgmt_platform_data bpc_mgmt_platform_data = {
+	.gpio_trigger = TEGRA_BPC_TRIGGER,
+	.bpc_mgmt_timeout = TEGRA_BPC_TIMEOUT,
+};
+
+static struct platform_device enterprise_bpc_mgmt_device = {
+	.name		= "tegra-bpc-mgmt",
+	.id		= -1,
+	.dev		= {
+		.platform_data = &bpc_mgmt_platform_data,
+	},
+};
+
+void __init enterprise_bpc_mgmt_init(void)
+{
+	int int_gpio;
+
+	tegra_gpio_enable(TEGRA_BPC_TRIGGER);
+
+	int_gpio = tegra_gpio_to_int_pin(TEGRA_BPC_TRIGGER);
+
+#ifdef CONFIG_SMP
+	cpumask_setall(&(bpc_mgmt_platform_data.affinity_mask));
+	irq_set_affinity_hint(int_gpio,
+				&(bpc_mgmt_platform_data.affinity_mask));
+	irq_set_affinity(int_gpio, &(bpc_mgmt_platform_data.affinity_mask));
+#endif
+	platform_device_register(&enterprise_bpc_mgmt_device);
+
+	return;
+}

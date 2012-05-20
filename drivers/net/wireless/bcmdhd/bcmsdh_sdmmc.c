@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: bcmsdh_sdmmc.c,v 1.14.64.3 2010-12-23 01:13:15 Exp $
+ * $Id: bcmsdh_sdmmc.c 282820 2011-09-09 15:40:35Z $
  */
 #include <typedefs.h>
 
@@ -30,7 +30,7 @@
 #include <bcmutils.h>
 #include <osl.h>
 #include <sdio.h>	/* SDIO Device and Protocol Specs */
-#include <sdioh.h>	/* SDIO Host Controller Specification */
+#include <sdioh.h>	/* Standard SDIO Host Controller Specification */
 #include <bcmsdbus.h>	/* bcmsdh to/from specific controller APIs */
 #include <sdiovar.h>	/* ioctl/iovars */
 
@@ -198,9 +198,14 @@ sdioh_detach(osl_t *osh, sdioh_info_t *sd)
 		sdio_release_host(gInstance->func[2]);
 
 		/* Disable Function 1 */
-		sdio_claim_host(gInstance->func[1]);
-		sdio_disable_func(gInstance->func[1]);
-		sdio_release_host(gInstance->func[1]);
+		if (gInstance->func[1]) {
+			sdio_claim_host(gInstance->func[1]);
+			sdio_disable_func(gInstance->func[1]);
+			sdio_release_host(gInstance->func[1]);
+		}
+
+		gInstance->func[1] = NULL;
+		gInstance->func[2] = NULL;
 
 		/* deregister irq */
 		sdioh_sdmmc_osfree(sd);
@@ -243,28 +248,33 @@ sdioh_enable_func_intr(void)
 	return SDIOH_API_RC_SUCCESS;
 }
 
+#endif /* defined(OOB_INTR_ONLY) && defined(HW_OOB) */
+
 extern SDIOH_API_RC
-sdioh_disable_func_intr(void)
+sdioh_disable_func_intr(int func)
 {
 	uint8 reg;
 	int err;
 
-	if (gInstance->func[0]) {
-		sdio_claim_host(gInstance->func[0]);
-		reg = sdio_readb(gInstance->func[0], SDIOD_CCCR_INTEN, &err);
+	if (gInstance->func[func]) {
+		sdio_claim_host(gInstance->func[func]);
+		reg = sdio_readb(gInstance->func[func], SDIOD_CCCR_INTEN, &err);
 		if (err) {
 			sd_err(("%s: error for read SDIO_CCCR_IENx : 0x%x\n", __FUNCTION__, err));
-			sdio_release_host(gInstance->func[0]);
+			sdio_release_host(gInstance->func[func]);
 			return SDIOH_API_RC_FAIL;
 		}
-
+#if defined(HW_OOB)
 		reg &= ~(INTR_CTL_FUNC1_EN | INTR_CTL_FUNC2_EN);
+#else
+		reg &= ~(1 << func);
+#endif
 		/* Disable master interrupt with the last function interrupt */
 		if (!(reg & 0xFE))
 			reg = 0;
-		sdio_writeb(gInstance->func[0], reg, SDIOD_CCCR_INTEN, &err);
+		sdio_writeb(gInstance->func[func], reg, SDIOD_CCCR_INTEN, &err);
 
-		sdio_release_host(gInstance->func[0]);
+		sdio_release_host(gInstance->func[func]);
 		if (err) {
 			sd_err(("%s: error for write SDIO_CCCR_IENx : 0x%x\n", __FUNCTION__, err));
 			return SDIOH_API_RC_FAIL;
@@ -272,7 +282,7 @@ sdioh_disable_func_intr(void)
 	}
 	return SDIOH_API_RC_SUCCESS;
 }
-#endif /* defined(OOB_INTR_ONLY) && defined(HW_OOB) */
+
 
 /* Configure callback to client when we recieve client interrupt */
 extern SDIOH_API_RC
@@ -314,6 +324,9 @@ sdioh_interrupt_deregister(sdioh_info_t *sd)
 
 #if !defined(OOB_INTR_ONLY)
 	if (gInstance->func[1]) {
+		sdioh_disable_func_intr(1);
+		/*Wait for the pending interrupts to be cleared*/
+		msleep(300);
 		/* register and unmask irq */
 		sdio_claim_host(gInstance->func[1]);
 		sdio_release_irq(gInstance->func[1]);
@@ -321,6 +334,9 @@ sdioh_interrupt_deregister(sdioh_info_t *sd)
 	}
 
 	if (gInstance->func[2]) {
+		sdioh_disable_func_intr(2);
+		/*Wait for the pending interrupts to be cleared*/
+		msleep(300);
 		/* Claim host controller F2 */
 		sdio_claim_host(gInstance->func[2]);
 		sdio_release_irq(gInstance->func[2]);
@@ -332,7 +348,7 @@ sdioh_interrupt_deregister(sdioh_info_t *sd)
 	sd->intr_handler = NULL;
 	sd->intr_handler_arg = NULL;
 #elif defined(HW_OOB)
-	sdioh_disable_func_intr();
+	sdioh_disable_func_intr(0);
 #endif /* !defined(OOB_INTR_ONLY) */
 	return SDIOH_API_RC_SUCCESS;
 }
@@ -997,11 +1013,11 @@ sdioh_request_buffer(sdioh_info_t *sd, uint pio_dma, uint fix_inc, uint write, u
 	if (pkt == NULL) {
 		sd_data(("%s: Creating new %s Packet, len=%d\n",
 		         __FUNCTION__, write ? "TX" : "RX", buflen_u));
-#ifdef DHD_USE_STATIC_BUF
+#ifdef CONFIG_DHD_USE_STATIC_BUF
 		if (!(mypkt = PKTGET_STATIC(sd->osh, buflen_u, write ? TRUE : FALSE))) {
 #else
 		if (!(mypkt = PKTGET(sd->osh, buflen_u, write ? TRUE : FALSE))) {
-#endif /* DHD_USE_STATIC_BUF */
+#endif /* CONFIG_DHD_USE_STATIC_BUF */
 			sd_err(("%s: PKTGET failed: len %d\n",
 			           __FUNCTION__, buflen_u));
 			return SDIOH_API_RC_FAIL;
@@ -1018,11 +1034,11 @@ sdioh_request_buffer(sdioh_info_t *sd, uint pio_dma, uint fix_inc, uint write, u
 		if (!write) {
 			bcopy(PKTDATA(sd->osh, mypkt), buffer, buflen_u);
 		}
-#ifdef DHD_USE_STATIC_BUF
+#ifdef CONFIG_DHD_USE_STATIC_BUF
 		PKTFREE_STATIC(sd->osh, mypkt, write ? TRUE : FALSE);
 #else
 		PKTFREE(sd->osh, mypkt, write ? TRUE : FALSE);
-#endif /* DHD_USE_STATIC_BUF */
+#endif /* CONFIG_DHD_USE_STATIC_BUF */
 	} else if (((uint32)(PKTDATA(sd->osh, pkt)) & DMA_ALIGN_MASK) != 0) {
 		/* Case 2: We have a packet, but it is unaligned. */
 
@@ -1031,11 +1047,11 @@ sdioh_request_buffer(sdioh_info_t *sd, uint pio_dma, uint fix_inc, uint write, u
 
 		sd_data(("%s: Creating aligned %s Packet, len=%d\n",
 		         __FUNCTION__, write ? "TX" : "RX", PKTLEN(sd->osh, pkt)));
-#ifdef DHD_USE_STATIC_BUF
+#ifdef CONFIG_DHD_USE_STATIC_BUF
 		if (!(mypkt = PKTGET_STATIC(sd->osh, PKTLEN(sd->osh, pkt), write ? TRUE : FALSE))) {
 #else
 		if (!(mypkt = PKTGET(sd->osh, PKTLEN(sd->osh, pkt), write ? TRUE : FALSE))) {
-#endif /* DHD_USE_STATIC_BUF */
+#endif /* CONFIG_DHD_USE_STATIC_BUF */
 			sd_err(("%s: PKTGET failed: len %d\n",
 			           __FUNCTION__, PKTLEN(sd->osh, pkt)));
 			return SDIOH_API_RC_FAIL;
@@ -1056,11 +1072,11 @@ sdioh_request_buffer(sdioh_info_t *sd, uint pio_dma, uint fix_inc, uint write, u
 			      PKTDATA(sd->osh, pkt),
 			      PKTLEN(sd->osh, mypkt));
 		}
-#ifdef DHD_USE_STATIC_BUF
+#ifdef CONFIG_DHD_USE_STATIC_BUF
 		PKTFREE_STATIC(sd->osh, mypkt, write ? TRUE : FALSE);
 #else
 		PKTFREE(sd->osh, mypkt, write ? TRUE : FALSE);
-#endif /* DHD_USE_STATIC_BUF */
+#endif /* CONFIG_DHD_USE_STATIC_BUF */
 	} else { /* case 3: We have a packet and it is aligned. */
 		sd_data(("%s: Aligned %s Packet, direct DMA\n",
 		         __FUNCTION__, write ? "Tx" : "Rx"));
@@ -1298,7 +1314,7 @@ sdioh_stop(sdioh_info_t *si)
 		sdio_release_host(gInstance->func[0]);
 #else /* defined(OOB_INTR_ONLY) */
 #if defined(HW_OOB)
-		sdioh_disable_func_intr();
+		sdioh_disable_func_intr(0);
 #endif
 		bcmsdh_oob_intr_set(FALSE);
 #endif /* !defined(OOB_INTR_ONLY) */

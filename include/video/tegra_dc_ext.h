@@ -55,6 +55,10 @@
 #define TEGRA_DC_EXT_BLEND_PREMULT	1
 #define TEGRA_DC_EXT_BLEND_COVERAGE	2
 
+#define TEGRA_DC_EXT_FLIP_FLAG_INVERT_H	(1 << 0)
+#define TEGRA_DC_EXT_FLIP_FLAG_INVERT_V	(1 << 1)
+#define TEGRA_DC_EXT_FLIP_FLAG_TILED	(1 << 2)
+
 struct tegra_dc_ext_flip_windowattr {
 	__s32	index;
 	__u32	buff_id;
@@ -82,11 +86,12 @@ struct tegra_dc_ext_flip_windowattr {
 	struct timespec timestamp;
 	__u32	pre_syncpt_id;
 	__u32	pre_syncpt_val;
-	/* These are optional; if zero, U and V are taken from buff_id */
+	/* These two are optional; if zero, U and V are taken from buff_id */
 	__u32	buff_id_u;
 	__u32	buff_id_v;
+	__u32	flags;
 	/* Leave some wiggle room for future expansion */
-	__u32   pad[6];
+	__u32   pad[5];
 };
 
 #define TEGRA_DC_EXT_FLIP_N_WINDOWS	3
@@ -174,6 +179,8 @@ struct tegra_dc_ext_csc {
  * To convert 8-bit per channel RGB values to 16-bit, duplicate the 8 bits
  * in low and high byte, e.g. r=r|(r<<8)
  *
+ * To just update flags, set len to 0.
+ *
  * Current Tegra DC hardware supports 8-bit per channel to 8-bit per channel,
  * and each hardware window (overlay) uses its own lookup table.
  *
@@ -188,7 +195,9 @@ struct tegra_dc_ext_lut {
 	__u16 *b;         /* array of 16-bit blue values, 0 to reset */
 };
 
-/* tegra_dc_ext_lut.flags - override fb device palette. Default is multiply. */
+/* tegra_dc_ext_lut.flags - override global fb device lookup table.
+ * Default behaviour is double-lookup.
+ */
 #define TEGRA_DC_EXT_LUT_FLAGS_FBOVERRIDE 0x01
 
 #define TEGRA_DC_EXT_FLAGS_ENABLED	1

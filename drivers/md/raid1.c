@@ -708,7 +708,7 @@ do_sync_io:
 	return NULL;
 }
 
-static int make_request(mddev_t *mddev, struct bio * bio)
+static void make_request(mddev_t *mddev, struct bio * bio)
 {
 	conf_t *conf = mddev->private;
 	mirror_info_t *mirror;
@@ -778,7 +778,7 @@ static int make_request(mddev_t *mddev, struct bio * bio)
 		if (rdisk < 0) {
 			/* couldn't find anywhere to read from */
 			raid_end_bio_io(r1_bio);
-			return 0;
+			return;
 		}
 		mirror = conf->mirrors + rdisk;
 
@@ -803,8 +803,38 @@ static int make_request(mddev_t *mddev, struct bio * bio)
 		read_bio->bi_rw = READ | do_sync;
 		read_bio->bi_private = r1_bio;
 
-		generic_make_request(read_bio);
-		return 0;
+		if (max_sectors < r1_bio->sectors) {
+			/* could not read all from this device, so we will
+			 * need another r1_bio.
+			 */
+
+			sectors_handled = (r1_bio->sector + max_sectors
+					   - bio->bi_sector);
+			r1_bio->sectors = max_sectors;
+			spin_lock_irq(&conf->device_lock);
+			if (bio->bi_phys_segments == 0)
+				bio->bi_phys_segments = 2;
+			else
+				bio->bi_phys_segments++;
+			spin_unlock_irq(&conf->device_lock);
+			/* Cannot call generic_make_request directly
+			 * as that will be queued in __make_request
+			 * and subsequent mempool_alloc might block waiting
+			 * for it.  So hand bio over to raid1d.
+			 */
+			reschedule_retry(r1_bio);
+
+			r1_bio = mempool_alloc(conf->r1bio_pool, GFP_NOIO);
+
+			r1_bio->master_bio = bio;
+			r1_bio->sectors = (bio->bi_size >> 9) - sectors_handled;
+			r1_bio->state = 0;
+			r1_bio->mddev = mddev;
+			r1_bio->sector = bio->bi_sector + sectors_handled;
+			goto read_again;
+		} else
+			generic_make_request(read_bio);
+		return;
 	}
 
 	/*
@@ -923,8 +953,6 @@ static int make_request(mddev_t *mddev, struct bio * bio)
 
 	if (do_sync || !bitmap || !plugged)
 		md_wakeup_thread(mddev->thread);
-
-	return 0;
 }
 
 static void status(struct seq_file *seq, mddev_t *mddev)
@@ -1708,7 +1736,6 @@ static sector_t sync_request(mddev_t *mddev, sector_t sector_nr, int *skipped, i
 		bio->bi_next = NULL;
 		bio->bi_flags &= ~(BIO_POOL_MASK-1);
 		bio->bi_flags |= 1 << BIO_UPTODATE;
-		bio->bi_comp_cpu = -1;
 		bio->bi_rw = READ;
 		bio->bi_vcnt = 0;
 		bio->bi_idx = 0;

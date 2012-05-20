@@ -43,6 +43,7 @@ static struct regulator_consumer_supply max8907c_SD1_supply[] = {
 
 static struct regulator_consumer_supply max8907c_SD2_supply[] = {
 	REGULATOR_SUPPLY("vdd_core", NULL),
+	REGULATOR_SUPPLY("vdd_aon", NULL),
 };
 
 static struct regulator_consumer_supply max8907c_SD3_supply[] = {
@@ -245,6 +246,7 @@ static struct tegra_suspend_platform_data whistler_suspend_data = {
 	.core_off_timer = 0xc00,
 	.corereq_high	= true,
 	.sysclkreq_high	= true,
+	.combined_req   = true,
 };
 
 int __init whistler_regulator_init(void)

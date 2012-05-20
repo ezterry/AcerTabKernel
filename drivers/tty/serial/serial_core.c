@@ -49,6 +49,19 @@ static DEFINE_MUTEX(port_mutex);
  */
 static struct lock_class_key port_lock_key;
 
+#if defined(CONFIG_ARCH_ACER_T20)
+static struct ktermios init_tty_termios = {
+	.c_iflag = ICRNL | IXON,
+	.c_oflag = OPOST | OLCUC,
+	.c_cflag = B115200 | CS8 | CREAD | HUPCL,
+	.c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK |
+		   ECHOCTL | ECHOKE | IEXTEN,
+	.c_cc = INIT_C_CC,
+	.c_ispeed = 115200,
+	.c_ospeed = 115200
+};
+#endif
+
 #define HIGH_BITS_OFFSET	((sizeof(long)-sizeof(int))*8)
 
 #ifdef CONFIG_SERIAL_CORE_CONSOLE
@@ -2032,6 +2045,11 @@ int uart_resume_port(struct uart_driver *drv, struct uart_port *uport)
 		 */
 		if (port->tty && port->tty->termios && termios.c_cflag == 0)
 			termios = *(port->tty->termios);
+
+#if defined(CONFIG_ARCH_ACER_T20)
+		if (termios.c_cflag == 0 && uport->line == 0)
+			termios = init_tty_termios;
+#endif
 
 		uport->ops->set_termios(uport, &termios, NULL);
 		if (console_suspend_enabled)

@@ -23,12 +23,15 @@
 #include <linux/resource.h>
 #include <linux/regulator/machine.h>
 #include <linux/mfd/tps6591x.h>
+#include <linux/mfd/max77663-core.h>
 #include <linux/gpio.h>
 #include <linux/io.h>
 #include <linux/regulator/gpio-switch-regulator.h>
 #include <linux/regulator/tps6591x-regulator.h>
 #include <linux/regulator/tps6236x-regulator.h>
 #include <linux/power/gpio-charger.h>
+
+#include <asm/mach-types.h>
 
 #include <mach/iomap.h>
 #include <mach/irqs.h>
@@ -158,7 +161,7 @@ static struct regulator_consumer_supply tps6591x_ldo8_supply_0[] = {
 };
 
 #define TPS_PDATA_INIT(_name, _sname, _minmv, _maxmv, _supply_reg, _always_on, \
-	_boot_on, _apply_uv, _init_uV, _init_enable, _init_apply, _ectrl) \
+	_boot_on, _apply_uv, _init_uV, _init_enable, _init_apply, _ectrl, _flags) \
 	static struct tps6591x_regulator_platform_data pdata_##_name##_##_sname = \
 	{								\
 		.regulator = {						\
@@ -182,27 +185,28 @@ static struct regulator_consumer_supply tps6591x_ldo8_supply_0[] = {
 		.init_uV =  _init_uV * 1000,				\
 		.init_enable = _init_enable,				\
 		.init_apply = _init_apply,				\
-		.ectrl = _ectrl						\
+		.ectrl = _ectrl,					\
+		.flags = _flags,					\
 	}
 
-TPS_PDATA_INIT(vdd1, skubit0_0, 600,  1500, 0, 1, 1, 0, -1, 0, 0, EXT_CTRL_SLEEP_OFF);
-TPS_PDATA_INIT(vdd1, skubit0_1, 600,  1500, 0, 1, 1, 0, -1, 0, 0, EXT_CTRL_SLEEP_OFF);
-TPS_PDATA_INIT(vdd2, 0,         600,  1500, 0, 1, 1, 0, -1, 0, 0, 0);
-TPS_PDATA_INIT(vddctrl, 0,      600,  1400, 0, 1, 1, 0, -1, 0, 0, EXT_CTRL_EN1);
-TPS_PDATA_INIT(vio,  0,         1500, 3300, 0, 1, 1, 0, -1, 0, 0, 0);
+TPS_PDATA_INIT(vdd1, skubit0_0, 600,  1500, 0, 1, 1, 0, -1, 0, 0, EXT_CTRL_SLEEP_OFF, 0);
+TPS_PDATA_INIT(vdd1, skubit0_1, 600,  1500, 0, 1, 1, 0, -1, 0, 0, EXT_CTRL_SLEEP_OFF, 0);
+TPS_PDATA_INIT(vdd2, 0,         600,  1500, 0, 1, 1, 0, -1, 0, 0, 0, 0);
+TPS_PDATA_INIT(vddctrl, 0,      600,  1400, 0, 1, 1, 0, -1, 0, 0, EXT_CTRL_EN1, 0);
+TPS_PDATA_INIT(vio,  0,         1500, 3300, 0, 1, 1, 0, -1, 0, 0, 0, 0);
 
-TPS_PDATA_INIT(ldo1, 0,         1000, 3300, tps6591x_rails(VDD_2), 0, 0, 0, -1, 0, 1, 0);
-TPS_PDATA_INIT(ldo2, 0,         1050, 1050, tps6591x_rails(VDD_2), 0, 0, 1, -1, 0, 1, 0);
+TPS_PDATA_INIT(ldo1, 0,         1000, 3300, tps6591x_rails(VDD_2), 0, 0, 0, -1, 0, 1, 0, 0);
+TPS_PDATA_INIT(ldo2, 0,         1050, 1050, tps6591x_rails(VDD_2), 0, 0, 1, -1, 0, 1, 0, 0);
 
-TPS_PDATA_INIT(ldo3, e118x,     1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0);
-TPS_PDATA_INIT(ldo3, e1198,     1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0);
-TPS_PDATA_INIT(ldo4, 0,         1000, 3300, 0, 1, 0, 0, -1, 0, 0, 0);
-TPS_PDATA_INIT(ldo5, e118x,     1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0);
-TPS_PDATA_INIT(ldo5, e1198,     1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0);
+TPS_PDATA_INIT(ldo3, e118x,     1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0);
+TPS_PDATA_INIT(ldo3, e1198,     1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0);
+TPS_PDATA_INIT(ldo4, 0,         1000, 3300, 0, 1, 0, 0, -1, 0, 0, 0, 0);
+TPS_PDATA_INIT(ldo5, e118x,     1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0);
+TPS_PDATA_INIT(ldo5, e1198,     1000, 3300, 0, 0, 0, 0, -1, 0, 0, 0, 0);
 
-TPS_PDATA_INIT(ldo6, 0,         1200, 1200, tps6591x_rails(VIO), 0, 0, 1, -1, 0, 0, 0);
-TPS_PDATA_INIT(ldo7, 0,         1200, 1200, tps6591x_rails(VIO), 1, 1, 1, -1, 0, 0, 0);
-TPS_PDATA_INIT(ldo8, 0,         1000, 3300, tps6591x_rails(VIO), 1, 0, 0, -1, 0, 0, 0);
+TPS_PDATA_INIT(ldo6, 0,         1200, 1200, tps6591x_rails(VIO), 0, 0, 1, -1, 0, 0, 0, 0);
+TPS_PDATA_INIT(ldo7, 0,         1200, 1200, tps6591x_rails(VIO), 1, 1, 1, -1, 0, 0, EXT_CTRL_SLEEP_OFF, LDO_LOW_POWER_ON_SUSPEND);
+TPS_PDATA_INIT(ldo8, 0,         1000, 3300, tps6591x_rails(VIO), 1, 0, 0, -1, 0, 0, EXT_CTRL_SLEEP_OFF, LDO_LOW_POWER_ON_SUSPEND);
 
 #if defined(CONFIG_RTC_DRV_TPS6591x)
 static struct tps6591x_rtc_platform_data rtc_data = {
@@ -354,6 +358,7 @@ static struct tps6236x_regulator_platform_data tps6236x_pdata = {
 		.consumer_supplies = tps6236x_dcdc_supply,		\
 		},							\
 	.internal_pd_enable = 0,					\
+	.enable_discharge = true,					\
 	.vsel = 3,							\
 	.init_uV = -1,							\
 	.init_apply = 0,						\
@@ -379,11 +384,17 @@ int __init cardhu_regulator_init(void)
 	pmc_ctrl = readl(pmc + PMC_CTRL);
 	writel(pmc_ctrl | PMC_CTRL_INTR_LOW, pmc + PMC_CTRL);
 
-	/* The regulator details have complete constraints */
-	regulator_has_full_constraints();
-
 	tegra_get_board_info(&board_info);
 	tegra_get_pmu_board_info(&pmu_board_info);
+
+	if (pmu_board_info.board_id == BOARD_PMU_PM298)
+		return cardhu_pm298_regulator_init();
+
+	if (pmu_board_info.board_id == BOARD_PMU_PM299)
+		return cardhu_pm299_regulator_init();
+
+	/* The regulator details have complete constraints */
+	regulator_has_full_constraints();
 
 	/* PMU-E1208, the ldo2 should be set to 1200mV */
 	if (pmu_board_info.board_id == BOARD_E1208) {
@@ -403,6 +414,9 @@ int __init cardhu_regulator_init(void)
 			tps_platform.subdevs = tps_devs_e1198_skubit0_0;
 		}
 	} else {
+		if (board_info.board_id == BOARD_PM269)
+			pdata_ldo3_e118x.slew_rate_uV_per_us = 250;
+
 		if (pmu_board_info.sku & SKU_DCDC_TPS62361_SUPPORT) {
 			tps_platform.num_subdevs = ARRAY_SIZE(tps_devs_e118x_skubit0_1);
 			tps_platform.subdevs = tps_devs_e118x_skubit0_1;
@@ -412,8 +426,10 @@ int __init cardhu_regulator_init(void)
 		}
 	}
 
-	/* E1291-A04: Enable DEV_SLP and enable sleep on GPIO2 */
-	if ((board_info.board_id == BOARD_E1291) && (board_info.fab == BOARD_FAB_A04)) {
+	/* E1291-A04/A05: Enable DEV_SLP and enable sleep on GPIO2 */
+	if ((board_info.board_id == BOARD_E1291) &&
+			((board_info.fab == BOARD_FAB_A04) ||
+			 (board_info.fab == BOARD_FAB_A05))) {
 		tps_platform.dev_slp_en = true;
 		tps_platform.gpio_init_data = tps_gpio_pdata_e1291_a04;
 		tps_platform.num_gpioinit_data =
@@ -555,14 +571,14 @@ static int gpio_switch_en_vdd_pnl1_voltages[] = { 3300};
 /* CAM1_LDO_EN from AP GPIO KB_ROW6 R06*/
 static struct regulator_consumer_supply gpio_switch_cam1_ldo_en_supply[] = {
 	REGULATOR_SUPPLY("vdd_2v8_cam1", NULL),
-	REGULATOR_SUPPLY("vdd_2v8_cam1_af", NULL),
+	REGULATOR_SUPPLY("vdd", "6-0072"),
 };
 static int gpio_switch_cam1_ldo_en_voltages[] = { 2800};
 
 /* CAM2_LDO_EN from AP GPIO KB_ROW7 R07*/
 static struct regulator_consumer_supply gpio_switch_cam2_ldo_en_supply[] = {
 	REGULATOR_SUPPLY("vdd_2v8_cam2", NULL),
-	REGULATOR_SUPPLY("vdd_2v8_cam2_af", NULL),
+	REGULATOR_SUPPLY("vdd", "7-0072"),
 };
 static int gpio_switch_cam2_ldo_en_voltages[] = { 2800};
 
@@ -607,6 +623,9 @@ static struct regulator_consumer_supply gpio_switch_en_1v8_cam_supply[] = {
 	REGULATOR_SUPPLY("vdd_1v8_cam1", NULL),
 	REGULATOR_SUPPLY("vdd_1v8_cam2", NULL),
 	REGULATOR_SUPPLY("vdd_1v8_cam3", NULL),
+	REGULATOR_SUPPLY("vdd_i2c", "6-0072"),
+	REGULATOR_SUPPLY("vdd_i2c", "7-0072"),
+	REGULATOR_SUPPLY("vdd_i2c", "2-0033"),
 };
 static int gpio_switch_en_1v8_cam_voltages[] = { 1800};
 
@@ -694,7 +713,7 @@ GREG_INIT(11, en_vdd_sdmmc1,	en_vdd_sdmmc1,	"vdd_3v3_devices",	0,      0,      T
 GREG_INIT(12, en_3v3_pex_hvdd,	en_3v3_pex_hvdd, "hvdd_pex_pmu",	0,      0,      TEGRA_GPIO_PL7,		false,	0,	0,	0,	0);
 GREG_INIT(13, en_1v8_cam,	en_1v8_cam,	"vdd_gen1v8",		0,      0,      TEGRA_GPIO_PBB4,	false,	0,	0,	0,	0);
 
-/* E1291-A04 specific */
+/* E1291-A04/A05 specific */
 GREG_INIT(1, en_5v0_a04,	en_5v0,		NULL,			0,      0,      TPS6591X_GPIO_8,	false,	0,	0,	0,	0);
 GREG_INIT(2, en_ddr_a04,	en_ddr,		NULL,			0,      0,      TPS6591X_GPIO_7,	false,	0,	0,	0,	0);
 GREG_INIT(3, en_3v3_sys_a04,	en_3v3_sys,	NULL,			0,      0,      TPS6591X_GPIO_6,	false,	0,	0,	0,	0);
@@ -757,6 +776,12 @@ GREG_INIT(21, en_vdd_bl2_a03,	en_vdd_bl2,	NULL,		0,      0,      TEGRA_GPIO_PDD0
 
 GREG_INIT(22, en_vbrtr,		en_vbrtr,	"vdd_3v3_devices",	0,      0,      PMU_TCA6416_GPIO_PORT12,	false,	0,	0,	0,	0);
 
+/* PM313 display board specific */
+GREG_INIT(4, en_vdd_bl_pm313,       en_vdd_bl,      NULL,
+		0,      0,      TEGRA_GPIO_PK3, false,  1,  0,  0,  0);
+GREG_INIT(6, en_vdd_pnl1_pm313,     en_vdd_pnl1,        "vdd_3v3_devices",
+		0,      0,      TEGRA_GPIO_PH3, false,  1,  0,  0,  0);
+
 #define ADD_GPIO_REG(_name) &gpio_pdata_##_name
 
 #define COMMON_GPIO_REG \
@@ -793,10 +818,8 @@ GREG_INIT(22, en_vbrtr,		en_vbrtr,	"vdd_3v3_devices",	0,      0,      PMU_TCA641
 	ADD_GPIO_REG(en_5v_cp),			\
 	ADD_GPIO_REG(en_5v0),			\
 	ADD_GPIO_REG(en_ddr),			\
-	ADD_GPIO_REG(en_vdd_bl_pm269),		\
 	ADD_GPIO_REG(en_3v3_sys),		\
 	ADD_GPIO_REG(en_3v3_modem),		\
-	ADD_GPIO_REG(en_vdd_pnl1_pm269),		\
 	ADD_GPIO_REG(cam1_ldo_en),		\
 	ADD_GPIO_REG(cam2_ldo_en),		\
 	ADD_GPIO_REG(cam3_ldo_en),		\
@@ -810,17 +833,36 @@ GREG_INIT(22, en_vbrtr,		en_vbrtr,	"vdd_3v3_devices",	0,      0,      PMU_TCA641
 	ADD_GPIO_REG(en_usb3_vbus_oc_e118x),	\
 	ADD_GPIO_REG(en_vddio_vid_oc_pm269),
 
-#define E118x_GPIO_REG	\
-	ADD_GPIO_REG(en_vdd_bl),		\
+#define E1247_DISPLAY_GPIO_REG		\
+	ADD_GPIO_REG(en_vdd_bl_pm269),	\
+	ADD_GPIO_REG(en_vdd_pnl1_pm269),
+
+#define PM313_DISPLAY_GPIO_REG		\
+	ADD_GPIO_REG(en_vdd_bl_pm313),	\
+	ADD_GPIO_REG(en_vdd_pnl1_pm313),
+
+#define E118x_GPIO_REG				\
+	ADD_GPIO_REG(en_5v_cp),			\
+	ADD_GPIO_REG(en_5v0),			\
+	ADD_GPIO_REG(en_ddr),			\
+	ADD_GPIO_REG(en_3v3_sys),		\
+	ADD_GPIO_REG(en_3v3_modem),		\
+	ADD_GPIO_REG(cam3_ldo_en),		\
+	ADD_GPIO_REG(en_vdd_com),		\
+	ADD_GPIO_REG(en_3v3_fuse),		\
+	ADD_GPIO_REG(en_3v3_emmc),		\
+	ADD_GPIO_REG(en_vdd_sdmmc1),		\
+	ADD_GPIO_REG(en_3v3_pex_hvdd),		\
+	ADD_GPIO_REG(en_1v8_cam),		\
 	ADD_GPIO_REG(dis_5v_switch_e118x),	\
 	ADD_GPIO_REG(en_usb1_vbus_oc_e118x),	\
 	ADD_GPIO_REG(en_usb3_vbus_oc_e118x),	\
-	ADD_GPIO_REG(en_vddio_vid_oc_e118x), \
+	ADD_GPIO_REG(en_vddio_vid_oc_e118x),	\
 	ADD_GPIO_REG(en_vbrtr),
 
-#define E1198_GPIO_REG	\
-	ADD_GPIO_REG(en_vddio_vid_oc),		\
-	ADD_GPIO_REG(cam1_ldo_en),		\
+#define E1198_GPIO_REG			\
+	ADD_GPIO_REG(en_vddio_vid_oc),	\
+	ADD_GPIO_REG(cam1_ldo_en),	\
 	ADD_GPIO_REG(cam2_ldo_en),
 
 #define E1291_1198_A00_GPIO_REG	\
@@ -836,8 +878,14 @@ GREG_INIT(22, en_vbrtr,		en_vbrtr,	"vdd_3v3_devices",	0,      0,      PMU_TCA641
 
 /* Gpio switch regulator platform data  for E1186/E1187/E1256*/
 static struct gpio_switch_regulator_subdev_data *gswitch_subdevs_e118x[] = {
-	COMMON_GPIO_REG
 	E118x_GPIO_REG
+	E1247_DISPLAY_GPIO_REG
+};
+
+/* Gpio switch regulator platform data  for E1186/E1187/E1256*/
+static struct gpio_switch_regulator_subdev_data *gswitch_subdevs_e118x_pm313[] = {
+	E118x_GPIO_REG
+	PM313_DISPLAY_GPIO_REG
 };
 
 /* Gpio switch regulator platform data for E1198 and E1291*/
@@ -873,6 +921,13 @@ static struct gpio_switch_regulator_subdev_data *gswitch_subdevs_e1198_a02[] = {
 /* Gpio switch regulator platform data for PM269*/
 static struct gpio_switch_regulator_subdev_data *gswitch_subdevs_pm269[] = {
 	PM269_GPIO_REG
+	E1247_DISPLAY_GPIO_REG
+};
+
+/* Gpio switch regulator platform data for PM269*/
+static struct gpio_switch_regulator_subdev_data *gswitch_subdevs_pm269_pm313[] = {
+	PM269_GPIO_REG
+	PM313_DISPLAY_GPIO_REG
 };
 
 /* Gpio switch regulator platform data for E1291 A03*/
@@ -882,7 +937,7 @@ static struct gpio_switch_regulator_subdev_data *gswitch_subdevs_e1291_a03[] = {
 	E1198_GPIO_REG
 };
 
-/* Gpio switch regulator platform data for E1291 A04*/
+/* Gpio switch regulator platform data for E1291 A04/A05*/
 static struct gpio_switch_regulator_subdev_data *gswitch_subdevs_e1291_a04[] = {
 	COMMON_GPIO_REG_E1291_A04
 	E1291_A03_GPIO_REG
@@ -903,7 +958,19 @@ int __init cardhu_gpio_switch_regulator_init(void)
 {
 	int i;
 	struct board_info board_info;
+	struct board_info pmu_board_info;
+	struct board_info display_board_info;
+
 	tegra_get_board_info(&board_info);
+	tegra_get_pmu_board_info(&pmu_board_info);
+	tegra_get_display_board_info(&display_board_info);
+
+	if (pmu_board_info.board_id == BOARD_PMU_PM298)
+		return cardhu_pm298_gpio_switch_regulator_init();
+
+	if (pmu_board_info.board_id == BOARD_PMU_PM299)
+		return cardhu_pm299_gpio_switch_regulator_init();
+
 	switch (board_info.board_id) {
 	case BOARD_E1198:
 		if (board_info.fab <= BOARD_FAB_A01) {
@@ -920,7 +987,8 @@ int __init cardhu_gpio_switch_regulator_init(void)
 			gswitch_pdata.num_subdevs =
 					ARRAY_SIZE(gswitch_subdevs_e1291_a03);
 			gswitch_pdata.subdevs = gswitch_subdevs_e1291_a03;
-		} else if (board_info.fab == BOARD_FAB_A04) {
+		} else if ((board_info.fab == BOARD_FAB_A04) ||
+				(board_info.fab == BOARD_FAB_A05)) {
 			gswitch_pdata.num_subdevs =
 					ARRAY_SIZE(gswitch_subdevs_e1291_a04);
 			gswitch_pdata.subdevs = gswitch_subdevs_e1291_a04;
@@ -937,16 +1005,28 @@ int __init cardhu_gpio_switch_regulator_init(void)
 	case BOARD_E1257:
 		gswitch_pdata.num_subdevs = ARRAY_SIZE(gswitch_subdevs_pm269);
 		gswitch_pdata.subdevs = gswitch_subdevs_pm269;
+		if (display_board_info.board_id == BOARD_DISPLAY_PM313) {
+			gswitch_pdata.num_subdevs = ARRAY_SIZE(gswitch_subdevs_pm269_pm313);
+			gswitch_pdata.subdevs = gswitch_subdevs_pm269_pm313;
+		} else {
+			gswitch_pdata.num_subdevs = ARRAY_SIZE(gswitch_subdevs_pm269);
+			gswitch_pdata.subdevs = gswitch_subdevs_pm269;
+		}
 		break;
 	default:
-		gswitch_pdata.num_subdevs = ARRAY_SIZE(gswitch_subdevs_e118x);
-		gswitch_pdata.subdevs = gswitch_subdevs_e118x;
+		if (display_board_info.board_id == BOARD_DISPLAY_PM313) {
+			gswitch_pdata.num_subdevs = ARRAY_SIZE(gswitch_subdevs_e118x_pm313);
+			gswitch_pdata.subdevs = gswitch_subdevs_e118x_pm313;
+		} else {
+			gswitch_pdata.num_subdevs = ARRAY_SIZE(gswitch_subdevs_e118x);
+			gswitch_pdata.subdevs = gswitch_subdevs_e118x;
+		}
 		break;
 	}
 
 	for (i = 0; i < gswitch_pdata.num_subdevs; ++i) {
 		struct gpio_switch_regulator_subdev_data *gswitch_data = gswitch_pdata.subdevs[i];
-		if (gswitch_data->gpio_nr <= TEGRA_NR_GPIOS)
+		if (gswitch_data->gpio_nr < TEGRA_NR_GPIOS)
 			tegra_gpio_enable(gswitch_data->gpio_nr);
 	}
 
@@ -968,7 +1048,7 @@ static void cardhu_board_resume(int lp_state, enum resume_stage stg)
 static struct tegra_suspend_platform_data cardhu_suspend_data = {
 	.cpu_timer	= 2000,
 	.cpu_off_timer	= 200,
-	.suspend_mode	= TEGRA_SUSPEND_LP1,
+	.suspend_mode	= TEGRA_SUSPEND_LP0,
 	.core_timer	= 0x7e7e,
 	.core_off_timer = 0,
 	.corereq_high	= true,
@@ -986,8 +1066,10 @@ int __init cardhu_suspend_init(void)
 	tegra_get_board_info(&board_info);
 	tegra_get_pmu_board_info(&pmu_board_info);
 
-	/* For PMU Fab A03 and A04 make core_pwr_req to high */
-	if ((pmu_board_info.fab == BOARD_FAB_A03) || (pmu_board_info.fab == BOARD_FAB_A04))
+	/* For PMU Fab A03, A04 and A05 make core_pwr_req to high */
+	if ((pmu_board_info.fab == BOARD_FAB_A03) ||
+		(pmu_board_info.fab == BOARD_FAB_A04) ||
+		 (pmu_board_info.fab == BOARD_FAB_A05))
 		cardhu_suspend_data.corereq_high = true;
 
 	/* CORE_PWR_REQ to be high for all processor/pmu board whose sku bit 0
@@ -1032,9 +1114,28 @@ static void cardhu_power_off(void)
 	while (1);
 }
 
+static void cardhu_pm298_power_off(void)
+{
+	int ret;
+	pr_err("cardhu-pm298: Powering off the device\n");
+	ret = max77663_power_off();
+	if (ret)
+		pr_err("cardhu-pm298: failed to power off\n");
+
+	while (1);
+}
+
 int __init cardhu_power_off_init(void)
 {
-	pm_power_off = cardhu_power_off;
+	struct board_info pmu_board_info;
+
+	tegra_get_pmu_board_info(&pmu_board_info);
+
+	if (pmu_board_info.board_id == BOARD_PMU_PM298)
+		pm_power_off = cardhu_pm298_power_off;
+	else
+		pm_power_off = cardhu_power_off;
+
 	return 0;
 }
 
@@ -1058,15 +1159,21 @@ void __init cardhu_tsensor_init(void)
 
 int __init cardhu_edp_init(void)
 {
-	/* Temporary initalization, needs to be set to the actual
-	   regulator current */
-	tegra_init_cpu_edp_limits(5000);
+	unsigned int regulator_mA;
+
+	regulator_mA = get_maximum_cpu_current_supported();
+	if (!regulator_mA) {
+		regulator_mA = 6000; /* regular T30/s */
+	}
+	pr_info("%s: CPU regulator %d mA\n", __func__, regulator_mA);
+
+	tegra_init_cpu_edp_limits(regulator_mA);
 	return 0;
 }
 #endif
 
 static char *cardhu_battery[] = {
-	"battery",
+	"bq27510-0",
 };
 
 static struct gpio_charger_platform_data cardhu_charger_pdata = {
@@ -1087,6 +1194,9 @@ static struct platform_device cardhu_charger_device = {
 
 static int __init cardhu_charger_late_init(void)
 {
+	if (!machine_is_cardhu())
+		return 0;
+
 	platform_device_register(&cardhu_charger_device);
 	return 0;
 }

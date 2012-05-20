@@ -88,6 +88,8 @@ struct tps6236x_chip {
 	int internal_pulldn_en;
 	const u16 *voltages;
 	u8 voltage_reg_mask;
+	bool is_force_pwm;
+	bool enable_discharge;
 };
 static inline int tps6236x_read(struct tps6236x_chip *tps, u8 reg)
 {
@@ -128,8 +130,36 @@ static int tps6236x_reg_write(struct tps6236x_chip *tps, u8 reg, u8 val)
 
 	return err;
 }
+
+static int tps6236x_reg_update(struct tps6236x_chip *tps, u8 reg, u8 val,
+		u8 mask)
+{
+	int err;
+	int data;
+	u8 reg_val;
+
+	mutex_lock(&tps->io_lock);
+	data = tps6236x_read(tps, reg);
+	if (data < 0) {
+		dev_err(tps->dev, "Read from reg 0x%x failed\n", reg);
+		err = data;
+		goto out;
+	}
+	reg_val = (u8)data;
+	reg_val = (reg_val & ~mask) | (val & mask);
+
+	err = tps6236x_write(tps, reg, reg_val);
+	if (err < 0)
+		dev_err(tps->dev, "Write for reg 0x%x failed\n", reg);
+
+out:
+	mutex_unlock(&tps->io_lock);
+	return err;
+}
+
 static int __tps6236x_dcdc_set_voltage(struct tps6236x_chip *tps,
-				int min_uV, int max_uV)
+				       int min_uV, int max_uV,
+				       unsigned *selector)
 {
 	int vsel;
 
@@ -146,6 +176,10 @@ static int __tps6236x_dcdc_set_voltage(struct tps6236x_chip *tps,
 		int mV = tps->voltages[vsel];
 		int uV = mV * 1000;
 		if (min_uV <= uV && uV <= max_uV) {
+			if (selector)
+				*selector = vsel;
+			if (tps->is_force_pwm)
+				vsel |= (1 << 7);
 			return tps6236x_reg_write(tps, REG_VSET0 + tps->vsel_id,
 					vsel);
 		}
@@ -187,11 +221,12 @@ static int tps6236x_dcdc_get_voltage(struct regulator_dev *dev)
 }
 
 static int tps6236x_dcdc_set_voltage(struct regulator_dev *dev,
-				int min_uV, int max_uV)
+				     int min_uV, int max_uV,
+				     unsigned *selector)
 {
 	struct tps6236x_chip *tps = rdev_get_drvdata(dev);
 
-	return __tps6236x_dcdc_set_voltage(tps, min_uV, max_uV);
+	return __tps6236x_dcdc_set_voltage(tps, min_uV, max_uV, selector);
 }
 
 static int tps6236x_dcdc_list_voltage(struct regulator_dev *dev,
@@ -276,19 +311,48 @@ static int tps6236x_init_dcdc(struct i2c_client *client,
 {
 	int st;
 	int init_mV;
+	int data;
 
 	if (pdata->internal_pd_enable)
 		st = tps6236x_write(tps, REG_CONTROL, 0xE0);
 	else
 		st = tps6236x_write(tps, REG_CONTROL, 0x0);
-	if (st < 0)
+	if (st < 0) {
+		dev_err(tps->dev, "%s() fails in writing reg %d\n",
+			__func__, REG_CONTROL);
 		return st;
+	}
+
+	data = tps6236x_reg_read(tps, REG_VSET0 + tps->vsel_id);
+	if (data < 0) {
+		dev_err(tps->dev, "%s() fails in reading reg %d\n",
+			__func__, REG_VSET0 + tps->vsel_id);
+		return data;
+	}
+	if (pdata->is_force_pwm)
+		data |= (1 << 7);
+	else
+		data &= ~(1 << 7);
+	st = tps6236x_reg_write(tps, REG_VSET0 + tps->vsel_id, data);
+	if (st < 0) {
+		dev_err(tps->dev, "%s() fails in writing reg %d\n",
+			__func__, REG_VSET0 + tps->vsel_id);
+		return st;
+	}
+
+	/* Reset output discharge path */
+	st = tps6236x_reg_update(tps, REG_RAMPCTRL, 0, 1 << 2);
+	if (st < 0) {
+		dev_err(tps->dev, "%s() fails in updating reg %d\n",
+			__func__, REG_RAMPCTRL);
+		return st;
+	}
 
 	if (!pdata->init_apply)
 		return 0;
 
 	init_mV = pdata->init_uV;
-	return __tps6236x_dcdc_set_voltage(tps, init_mV, init_mV);
+	return __tps6236x_dcdc_set_voltage(tps, init_mV, init_mV, 0);
 }
 
 static int __devinit tps6236x_probe(struct i2c_client *client,
@@ -329,6 +393,8 @@ static int __devinit tps6236x_probe(struct i2c_client *client,
 
 	mutex_init(&tps->io_lock);
 
+	tps->is_force_pwm = pdata->is_force_pwm;
+	tps->enable_discharge = pdata->enable_discharge;
 	tps->chip_id = id->driver_data;
 	tps->client = client;
 	tps->dev = &client->dev;
@@ -406,6 +472,21 @@ static int __devexit tps6236x_remove(struct i2c_client *client)
 	return 0;
 }
 
+static void tps6236x_shutdown(struct i2c_client *client)
+{
+	struct tps6236x_chip *tps = i2c_get_clientdata(client);
+	int st;
+
+	if (!tps->enable_discharge)
+		return;
+
+	/* Configure the output discharge path */
+	st = tps6236x_reg_update(tps, REG_RAMPCTRL, (1 << 2), (1 << 2));
+	if (st < 0)
+		dev_err(tps->dev, "%s() fails in updating reg %d\n",
+			__func__, REG_RAMPCTRL);
+}
+
 static const struct i2c_device_id tps6236x_id[] = {
 	{.name = "tps62360",  .driver_data = TPS62360},
 	{.name = "tps62361B", .driver_data = TPS62361B},
@@ -421,6 +502,7 @@ static struct i2c_driver tps6236x_i2c_driver = {
 	},
 	.probe = tps6236x_probe,
 	.remove = __devexit_p(tps6236x_remove),
+	.shutdown = tps6236x_shutdown,
 	.id_table = tps6236x_id,
 };
 

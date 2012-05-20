@@ -228,9 +228,15 @@
 #define TEGRA30_I2S_LCOEF_COEF_MASK_US			0xffff
 #define TEGRA30_I2S_LCOEF_COEF_MASK			(TEGRA30_I2S_LCOEF_COEF_MASK_US << TEGRA30_I2S_LCOEF_COEF_SHIFT)
 
+/* Number of i2s controllers*/
+#define TEGRA30_NR_I2S_IFC				5
+
 struct tegra30_i2s {
 	int id;
 	struct clk *clk_i2s;
+	struct clk *clk_i2s_sync;
+	struct clk *clk_audio_2x;
+	struct clk *clk_pll_a_out0;
 	enum tegra30_ahub_rxcif rxcif;
 	struct tegra_pcm_dma_params capture_dma_data;
 	enum tegra30_ahub_txcif txcif;
@@ -238,6 +244,29 @@ struct tegra30_i2s {
 	void __iomem *regs;
 	struct dentry *debug;
 	u32 reg_ctrl;
+	u32 reg_ch_ctrl;
+	int dam_ifc;
+	int dam_ch_refcount;
+	int  playback_ref_count;
+	bool is_dam_used;
+#ifdef CONFIG_PM
+	u32  reg_cache[(TEGRA30_I2S_CIF_TX_CTRL >> 2) + 1];
+#endif
 };
+
+struct codec_config {
+	int i2s_id;
+	int rate;
+	int channels;
+	int bitsize;
+	int is_i2smaster;
+	int is_format_dsp;
+};
+
+int tegra30_make_voice_call_connections(struct codec_config *codec_info,
+			struct codec_config *bb_info);
+
+int tegra30_break_voice_call_connections(struct codec_config *codec_info,
+			struct codec_config *bb_info);
 
 #endif

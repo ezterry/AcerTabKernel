@@ -32,6 +32,7 @@ extern struct platform_device tegra_i2c_device2;
 extern struct platform_device tegra_i2c_device3;
 extern struct platform_device tegra_i2c_device4;
 extern struct platform_device tegra_kbc_device;
+extern struct platform_device tegra_pci_device;
 #ifndef CONFIG_ARCH_TEGRA_2x_SOC
 extern struct platform_device tegra_i2c_device5;
 #endif
@@ -48,6 +49,7 @@ extern struct platform_device tegra_spi_device5;
 extern struct platform_device tegra_spi_device6;
 extern struct platform_device tegra_spi_slave_device5;
 extern struct platform_device tegra_spi_slave_device6;
+extern struct platform_device tegra_dtv_device;
 #endif
 extern struct platform_device tegra_ehci1_device;
 extern struct platform_device tegra_ehci2_device;
@@ -63,6 +65,8 @@ extern struct platform_device tegra_i2s_device2;
 extern struct platform_device tegra_spdif_device;
 extern struct platform_device tegra_das_device;
 extern struct platform_device spdif_dit_device;
+extern struct platform_device bluetooth_dit_device;
+extern struct platform_device baseband_dit_device;
 extern struct platform_device tegra_pcm_device;
 extern struct platform_device tegra_w1_device;
 extern struct platform_device tegra_udc_device;
@@ -80,6 +84,9 @@ extern struct platform_device tegra_apbif0_device;
 extern struct platform_device tegra_apbif1_device;
 extern struct platform_device tegra_apbif2_device;
 extern struct platform_device tegra_apbif3_device;
+extern struct platform_device tegra_dam_device0;
+extern struct platform_device tegra_dam_device1;
+extern struct platform_device tegra_dam_device2;
 extern struct platform_device tegra_hda_device;
 extern struct platform_device tegra_sata_device;
 #endif
@@ -106,7 +113,7 @@ extern struct platform_device tegra_aes_device;
 #if !defined(CONFIG_ARCH_TEGRA_2x_SOC)
 extern struct platform_device tegra_tsensor_device;
 #endif
-
+extern struct platform_device tegra_nor_device;
 extern struct platform_device debug_uarta_device;
 extern struct platform_device debug_uartb_device;
 extern struct platform_device debug_uartc_device;

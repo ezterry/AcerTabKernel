@@ -54,6 +54,7 @@ struct tegra_suspend_platform_data {
 	unsigned long core_off_timer;	/* core power off time ticks, LP0 */
 	bool corereq_high;         /* Core power request active-high */
 	bool sysclkreq_high;       /* System clock request is active-high */
+	bool combined_req;         /* if core & CPU power requests are combined */
 	enum tegra_suspend_mode suspend_mode;
 	unsigned long cpu_lp2_min_residency; /* Min LP2 state residency in us */
 	void (*board_suspend)(int lp_state, enum suspend_stage stg);
@@ -101,7 +102,7 @@ static inline void tegra_lp0_cpu_mode(bool enter) {}
 #endif
 
 #ifdef CONFIG_TEGRA_CLUSTER_CONTROL
-#define INSTRUMENT_CLUSTER_SWITCH 1	/* Should be zero for shipping code */
+#define INSTRUMENT_CLUSTER_SWITCH 0	/* Should be zero for shipping code */
 #define DEBUG_CLUSTER_SWITCH 0		/* Should be zero for shipping code */
 #define PARAMETERIZE_CLUSTER_SWITCH 1	/* Should be zero for shipping code */
 
@@ -191,6 +192,10 @@ static inline void tegra_cluster_switch_set_parameters(
 extern bool tegra_all_cpus_booted __read_mostly;
 #else
 #define tegra_all_cpus_booted (true)
+#endif
+
+#ifdef CONFIG_TRUSTED_FOUNDATIONS
+void tegra_generic_smc(u32 type, u32 subtype, u32 arg);
 #endif
 
 /* The debug channel uart base physical address */

@@ -38,7 +38,7 @@
 #define CARDHU_WLAN_WOW	TEGRA_GPIO_PO4
 #define CARDHU_SD_CD TEGRA_GPIO_PI5
 #define CARDHU_SD_WP TEGRA_GPIO_PT3
-#define PM269_SD_WP TEGRA_GPIO_PZ4
+#define PM269_SD_WP -1
 
 static void (*wifi_status_cb)(int card_present, void *dev_id);
 static void *wifi_status_cb_devid;
@@ -164,6 +164,8 @@ static struct tegra_sdhci_platform_data tegra_sdhci_platform_data3 = {
 	.cd_gpio = -1,
 	.wp_gpio = -1,
 	.power_gpio = -1,
+	.is_8bit = 1,
+	.tap_delay = 0x0F,
 	.mmc_data = {
 		.built_in = 1,
 	}
@@ -286,6 +288,7 @@ int __init cardhu_sdhci_init(void)
 		(board_info.board_id == BOARD_PM305) ||
 		(board_info.board_id == BOARD_PM311)) {
 			tegra_sdhci_platform_data0.wp_gpio = PM269_SD_WP;
+			tegra_sdhci_platform_data2.max_clk_limit = 12000000;
 	}
 
 	platform_device_register(&tegra_sdhci_device3);

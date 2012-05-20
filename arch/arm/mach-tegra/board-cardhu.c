@@ -33,13 +33,12 @@
 #include <linux/gpio.h>
 #include <linux/input.h>
 #include <linux/platform_data/tegra_usb.h>
-#include <linux/usb/android_composite.h>
-#include <linux/usb/f_accessory.h>
 #include <linux/spi/spi.h>
 #include <linux/i2c/atmel_mxt_ts.h>
 #include <linux/tegra_uart.h>
 #include <linux/memblock.h>
 #include <linux/spi-tegra.h>
+#include <linux/nfc/pn544.h>
 
 #include <sound/wm8903.h>
 
@@ -54,6 +53,8 @@
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <mach/usb_phy.h>
+#include <mach/thermal.h>
+#include <mach/pci.h>
 
 #include "board.h"
 #include "clock.h"
@@ -63,19 +64,24 @@
 #include "fuse.h"
 #include "pm.h"
 #include "baseband-xmm-power.h"
+#include "wdt-recovery.h"
 
-static struct usb_mass_storage_platform_data tegra_usb_fsg_platform = {
-	.vendor = "NVIDIA",
-	.product = "Tegra 3",
-	.nluns = 1,
-};
-
-static struct platform_device tegra_usb_fsg_device = {
-	.name = "usb_mass_storage",
-	.id = -1,
-	.dev = {
-		.platform_data = &tegra_usb_fsg_platform,
-	},
+/* All units are in millicelsius */
+static struct tegra_thermal_data thermal_data = {
+	.temp_throttle = 85000,
+	.temp_shutdown = 90000,
+	.temp_offset = TDIODE_OFFSET, /* temps based on tdiode */
+#ifdef CONFIG_TEGRA_EDP_LIMITS
+	.edp_offset = TDIODE_OFFSET,  /* edp based on tdiode */
+	.hysteresis_edp = 3000,
+#endif
+#ifdef CONFIG_TEGRA_THERMAL_SYSFS
+	.tc1 = 0,
+	.tc2 = 1,
+	.passive_delay = 2000,
+#else
+	.hysteresis_throttle = 1000,
+#endif
 };
 
 /* !!!TODO: Change for cardhu (Taken from Ventana) */
@@ -115,7 +121,6 @@ static struct tegra_utmip_config utmi_phy_config[] = {
 	},
 };
 
-#ifdef CONFIG_BCM4329_RFKILL
 static struct resource cardhu_bcm4329_rfkill_resources[] = {
 	{
 		.name   = "bcm4329_nshutdown_gpio",
@@ -132,192 +137,80 @@ static struct platform_device cardhu_bcm4329_rfkill_device = {
 	.resource       = cardhu_bcm4329_rfkill_resources,
 };
 
-static noinline void __init cardhu_bt_rfkill(void)
+static struct resource cardhu_bluesleep_resources[] = {
+	[0] = {
+		.name = "gpio_host_wake",
+			.start  = TEGRA_GPIO_PU6,
+			.end    = TEGRA_GPIO_PU6,
+			.flags  = IORESOURCE_IO,
+	},
+	[1] = {
+		.name = "gpio_ext_wake",
+			.start  = TEGRA_GPIO_PU1,
+			.end    = TEGRA_GPIO_PU1,
+			.flags  = IORESOURCE_IO,
+	},
+	[2] = {
+		.name = "host_wake",
+			.start  = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PU6),
+			.end    = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PU6),
+			.flags  = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE,
+	},
+};
+
+static struct platform_device cardhu_bluesleep_device = {
+	.name           = "bluesleep",
+	.id             = -1,
+	.num_resources  = ARRAY_SIZE(cardhu_bluesleep_resources),
+	.resource       = cardhu_bluesleep_resources,
+};
+
+static noinline void __init cardhu_setup_bluesleep(void)
 {
-	platform_device_register(&cardhu_bcm4329_rfkill_device);
-
-	return;
-}
-#else
-static inline void cardhu_bt_rfkill(void) { }
-#endif
-
-#ifdef CONFIG_BT_BLUESLEEP
-static noinline void __init tegra_setup_bluesleep(void)
-{
-	struct platform_device *pdev = NULL;
-	struct resource *res;
-
-	pdev = platform_device_alloc("bluesleep", 0);
-	if (!pdev) {
-		pr_err("unable to allocate platform device for bluesleep");
-		return;
-	}
-
-	res = kzalloc(sizeof(struct resource) * 3, GFP_KERNEL);
-	if (!res) {
-		pr_err("unable to allocate resource for bluesleep\n");
-		goto err_free_dev;
-	}
-
-	res[0].name   = "gpio_host_wake";
-	res[0].start  = TEGRA_GPIO_PU6;
-	res[0].end    = TEGRA_GPIO_PU6;
-	res[0].flags  = IORESOURCE_IO;
-
-	res[1].name   = "gpio_ext_wake";
-	res[1].start  = TEGRA_GPIO_PU1;
-	res[1].end    = TEGRA_GPIO_PU1;
-	res[1].flags  = IORESOURCE_IO;
-
-	res[2].name   = "host_wake";
-	res[2].start  = gpio_to_irq(TEGRA_GPIO_PU6);
-	res[2].end    = gpio_to_irq(TEGRA_GPIO_PU6);
-	res[2].flags  = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE ;
-
-	if (platform_device_add_resources(pdev, res, 3)) {
-		pr_err("unable to add resources to bluesleep device\n");
-		goto err_free_res;
-	}
-
-	if (platform_device_add(pdev)) {
-		pr_err("unable to add bluesleep device\n");
-		goto err_free_res;
-	}
+	platform_device_register(&cardhu_bluesleep_device);
 	tegra_gpio_enable(TEGRA_GPIO_PU6);
 	tegra_gpio_enable(TEGRA_GPIO_PU1);
-
-return;
-
-err_free_res:
-	kfree(res);
-err_free_dev:
-	platform_device_put(pdev);
 	return;
 }
-#else
-static inline void tegra_setup_bluesleep(void) { }
-#endif
 
 static __initdata struct tegra_clk_init_table cardhu_clk_init_table[] = {
 	/* name		parent		rate		enabled */
-	{ "pll_m",	NULL,		0,		true},
+	{ "pll_m",	NULL,		0,		false},
 	{ "hda",	"pll_p",	108000000,	false},
 	{ "hda2codec_2x","pll_p",	48000000,	false},
 	{ "pwm",	"pll_p",	3187500,	false},
 	{ "blink",	"clk_32k",	32768,		true},
 	{ "i2s1",	"pll_a_out0",	0,		false},
+	{ "i2s3",	"pll_a_out0",	0,		false},
 	{ "spdif_out",	"pll_a_out0",	0,		false},
-	{ "sdmmc3",	"clk_m",	12000000,	true},
+	{ "d_audio",	"pll_a_out0",	0,		false},
+	{ "dam0",	"pll_a_out0",	0,		false},
+	{ "dam1",	"pll_a_out0",	0,		false},
+	{ "dam2",	"pll_a_out0",	0,		false},
+	{ "audio1",	"i2s1_sync",	0,		false},
+	{ "audio3",	"i2s3_sync",	0,		false},
 	{ "vi_sensor",	"pll_p",	150000000,	false},
+	{ "i2c1",	"pll_p",	3200000,	false},
+	{ "i2c2",	"pll_p",	3200000,	false},
+	{ "i2c3",	"pll_p",	3200000,	false},
+	{ "i2c4",	"pll_p",	3200000,	false},
+	{ "i2c5",	"pll_p",	3200000,	false},
 	{ NULL,		NULL,		0,		0},
 };
 
-#define USB_MANUFACTURER_NAME	"NVIDIA"
-#define USB_PRODUCT_NAME		"Cardhu"
-#define USB_PRODUCT_ID_MTP_ADB	0x7100
-#define USB_PRODUCT_ID_MTP		0x7102
-#define USB_PRODUCT_ID_RNDIS	0x7103
-#define USB_VENDOR_ID			0x0955
+static struct pn544_i2c_platform_data nfc_pdata = {
+	.irq_gpio = TEGRA_GPIO_PX0,
+	.ven_gpio = TEGRA_GPIO_PP3,
+	.firm_gpio = TEGRA_GPIO_PO7,
+	};
 
-static char *usb_functions_mtp_ums[] = { "mtp", "usb_mass_storage" };
-static char *usb_functions_mtp_adb_ums[] = { "mtp", "adb", "usb_mass_storage" };
-#ifdef CONFIG_USB_ANDROID_ACCESSORY
-static char *usb_functions_accessory[] = { "accessory" };
-static char *usb_functions_accessory_adb[] = { "accessory", "adb" };
-#endif
-#ifdef CONFIG_USB_ANDROID_RNDIS
-static char *usb_functions_rndis[] = { "rndis" };
-static char *usb_functions_rndis_adb[] = { "rndis", "adb" };
-#endif
-static char *usb_functions_all[] = {
-#ifdef CONFIG_USB_ANDROID_RNDIS
-	"rndis",
-#endif
-#ifdef CONFIG_USB_ANDROID_ACCESSORY
-	"accessory",
-#endif
-	"mtp",
-	"adb",
-	"usb_mass_storage"
-};
-
-static struct android_usb_product usb_products[] = {
+static struct i2c_board_info __initdata cardhu_i2c_bus3_board_info[] = {
 	{
-		.product_id     = USB_PRODUCT_ID_MTP,
-		.num_functions  = ARRAY_SIZE(usb_functions_mtp_ums),
-		.functions      = usb_functions_mtp_ums,
-	},
-	{
-		.product_id     = USB_PRODUCT_ID_MTP_ADB,
-		.num_functions  = ARRAY_SIZE(usb_functions_mtp_adb_ums),
-		.functions      = usb_functions_mtp_adb_ums,
-	},
-#ifdef CONFIG_USB_ANDROID_ACCESSORY
-	{
-		.vendor_id	= USB_ACCESSORY_VENDOR_ID,
-		.product_id	= USB_ACCESSORY_PRODUCT_ID,
-		.num_functions	= ARRAY_SIZE(usb_functions_accessory),
-		.functions	= usb_functions_accessory,
-	},
-	{
-		.vendor_id	= USB_ACCESSORY_VENDOR_ID,
-		.product_id	= USB_ACCESSORY_ADB_PRODUCT_ID,
-		.num_functions	= ARRAY_SIZE(usb_functions_accessory_adb),
-		.functions	= usb_functions_accessory_adb,
-	},
-#endif
-#ifdef CONFIG_USB_ANDROID_RNDIS
-	{
-		.product_id     = USB_PRODUCT_ID_RNDIS,
-		.num_functions  = ARRAY_SIZE(usb_functions_rndis),
-		.functions      = usb_functions_rndis,
-	},
-	{
-		.product_id     = USB_PRODUCT_ID_RNDIS,
-		.num_functions  = ARRAY_SIZE(usb_functions_rndis_adb),
-		.functions      = usb_functions_rndis_adb,
-	},
-#endif
-};
-
-/* standard android USB platform data */
-static struct android_usb_platform_data andusb_plat = {
-	.vendor_id              = USB_VENDOR_ID,
-	.product_id             = USB_PRODUCT_ID_MTP_ADB,
-	.manufacturer_name      = USB_MANUFACTURER_NAME,
-	.product_name           = USB_PRODUCT_NAME,
-	.serial_number          = NULL,
-	.num_products = ARRAY_SIZE(usb_products),
-	.products = usb_products,
-	.num_functions = ARRAY_SIZE(usb_functions_all),
-	.functions = usb_functions_all,
-};
-
-static struct platform_device androidusb_device = {
-	.name   = "android_usb",
-	.id     = -1,
-	.dev    = {
-		.platform_data  = &andusb_plat,
+		I2C_BOARD_INFO("pn544", 0x28),
+		.platform_data = &nfc_pdata,
+		.irq = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PX0),
 	},
 };
-
-#ifdef CONFIG_USB_ANDROID_RNDIS
-static struct usb_ether_platform_data rndis_pdata = {
-	.ethaddr = {0, 0, 0, 0, 0, 0},
-	.vendorID = USB_VENDOR_ID,
-	.vendorDescr = USB_MANUFACTURER_NAME,
-};
-
-static struct platform_device rndis_device = {
-	.name   = "rndis",
-	.id     = -1,
-	.dev    = {
-		.platform_data  = &rndis_pdata,
-	},
-};
-#endif
-
 static struct tegra_i2c_platform_data cardhu_i2c1_platform_data = {
 	.adapter_nr	= 0,
 	.bus_count	= 1,
@@ -409,6 +302,7 @@ static void cardhu_i2c_init(void)
 	platform_device_register(&tegra_i2c_device1);
 
 	i2c_register_board_info(4, &wm8903_board_info, 1);
+	i2c_register_board_info(2, cardhu_i2c_bus3_board_info, 1);
 }
 
 static struct platform_device *cardhu_uart_devices[] __initdata = {
@@ -421,7 +315,9 @@ static struct platform_device *cardhu_uart_devices[] __initdata = {
 static struct uart_clk_parent uart_parent_clk[] = {
 	[0] = {.name = "clk_m"},
 	[1] = {.name = "pll_p"},
+#ifndef CONFIG_TEGRA_PLLM_RESTRICTED
 	[2] = {.name = "pll_m"},
+#endif
 };
 
 static struct tegra_uart_platform_data cardhu_uart_pdata;
@@ -429,32 +325,80 @@ static struct tegra_uart_platform_data cardhu_uart_pdata;
 static void __init uart_debug_init(void)
 {
 	struct board_info board_info;
+	int debug_port_id;
 
 	tegra_get_board_info(&board_info);
-	/* UARTB is debug port
-	 *       for SLT - E1186/E1187/PM269
-	 *       for E1256/E1257
-	 */
-	if (((board_info.sku & SKU_SLT_ULPI_SUPPORT) &&
-		((board_info.board_id == BOARD_E1186) ||
-		(board_info.board_id == BOARD_E1187) ||
-		(board_info.board_id == BOARD_PM269))) ||
-		(board_info.board_id == BOARD_E1256) ||
-		(board_info.board_id == BOARD_E1257)) {
-			/* UARTB is the debug port. */
-			pr_info("Selecting UARTB as the debug console\n");
-			cardhu_uart_devices[1] = &debug_uartb_device;
-			debug_uart_clk =  clk_get_sys("serial8250.0", "uartb");
-			debug_uart_port_base = ((struct plat_serial8250_port *)(
-				debug_uartb_device.dev.platform_data))->mapbase;
-			return;
+
+	debug_port_id = get_tegra_uart_debug_port_id();
+	if (debug_port_id < 0) {
+		debug_port_id = 0;
+			/* UARTB is debug port
+			 *       for SLT - E1186/E1187/PM269
+			 *       for E1256/E1257
+			 */
+		if (((board_info.sku & SKU_SLT_ULPI_SUPPORT) &&
+			((board_info.board_id == BOARD_E1186) ||
+			(board_info.board_id == BOARD_E1187) ||
+			(board_info.board_id == BOARD_PM269))) ||
+			(board_info.board_id == BOARD_E1256) ||
+			(board_info.board_id == BOARD_E1257))
+				debug_port_id = 1;
 	}
-	/* UARTA is the debug port. */
-	pr_info("Selecting UARTA as the debug console\n");
-	cardhu_uart_devices[0] = &debug_uarta_device;
-	debug_uart_clk = clk_get_sys("serial8250.0", "uarta");
-	debug_uart_port_base = ((struct plat_serial8250_port *)(
+	switch (debug_port_id) {
+	case 0:
+		/* UARTA is the debug port. */
+		pr_info("Selecting UARTA as the debug console\n");
+		cardhu_uart_devices[0] = &debug_uarta_device;
+		debug_uart_clk = clk_get_sys("serial8250.0", "uarta");
+		debug_uart_port_base = ((struct plat_serial8250_port *)(
 			debug_uarta_device.dev.platform_data))->mapbase;
+		break;
+
+	case 1:
+		/* UARTB is the debug port. */
+		pr_info("Selecting UARTB as the debug console\n");
+		cardhu_uart_devices[1] = &debug_uartb_device;
+		debug_uart_clk =  clk_get_sys("serial8250.0", "uartb");
+		debug_uart_port_base = ((struct plat_serial8250_port *)(
+			debug_uartb_device.dev.platform_data))->mapbase;
+		break;
+
+	case 2:
+		/* UARTC is the debug port. */
+		pr_info("Selecting UARTC as the debug console\n");
+		cardhu_uart_devices[2] = &debug_uartc_device;
+		debug_uart_clk =  clk_get_sys("serial8250.0", "uartc");
+		debug_uart_port_base = ((struct plat_serial8250_port *)(
+			debug_uartc_device.dev.platform_data))->mapbase;
+		break;
+
+	case 3:
+		/* UARTD is the debug port. */
+		pr_info("Selecting UARTD as the debug console\n");
+		cardhu_uart_devices[3] = &debug_uartd_device;
+		debug_uart_clk =  clk_get_sys("serial8250.0", "uartd");
+		debug_uart_port_base = ((struct plat_serial8250_port *)(
+			debug_uartd_device.dev.platform_data))->mapbase;
+		break;
+
+	case 4:
+		/* UARTE is the debug port. */
+		pr_info("Selecting UARTE as the debug console\n");
+		cardhu_uart_devices[4] = &debug_uarte_device;
+		debug_uart_clk =  clk_get_sys("serial8250.0", "uarte");
+		debug_uart_port_base = ((struct plat_serial8250_port *)(
+			debug_uarte_device.dev.platform_data))->mapbase;
+		break;
+
+	default:
+		pr_info("The debug console id %d is invalid, Assuming UARTA", debug_port_id);
+		cardhu_uart_devices[0] = &debug_uarta_device;
+		debug_uart_clk = clk_get_sys("serial8250.0", "uarta");
+		debug_uart_port_base = ((struct plat_serial8250_port *)(
+			debug_uarta_device.dev.platform_data))->mapbase;
+		break;
+	}
+	return;
 }
 
 static void __init cardhu_uart_init(void)
@@ -516,8 +460,12 @@ static struct platform_device *cardhu_spi_devices[] __initdata = {
 
 struct spi_clk_parent spi_parent_clk[] = {
 	[0] = {.name = "pll_p"},
+#ifndef CONFIG_TEGRA_PLLM_RESTRICTED
 	[1] = {.name = "pll_m"},
 	[2] = {.name = "clk_m"},
+#else
+	[1] = {.name = "clk_m"},
+#endif
 };
 
 static struct tegra_spi_platform_data cardhu_spi_pdata = {
@@ -554,6 +502,8 @@ static void __init cardhu_spi_init(void)
 	if (board_info.board_id == BOARD_E1198) {
 		tegra_spi_device2.dev.platform_data = &cardhu_spi_pdata;
 		platform_device_register(&tegra_spi_device2);
+		tegra_spi_slave_device1.dev.platform_data = &cardhu_spi_pdata;
+		platform_device_register(&tegra_spi_slave_device1);
 	}
 }
 
@@ -610,11 +560,6 @@ static struct platform_device *cardhu_devices[] __initdata = {
 	&tegra_pmu_device,
 	&tegra_rtc_device,
 	&tegra_udc_device,
-	&androidusb_device,
-	&tegra_usb_fsg_device,
-#if defined(CONFIG_SND_HDA_TEGRA)
-	&tegra_hda_device,
-#endif
 #if defined(CONFIG_TEGRA_IOVMM_SMMU)
 	&tegra_smmu_device,
 #endif
@@ -627,11 +572,18 @@ static struct platform_device *cardhu_devices[] __initdata = {
 	&tegra_se_device,
 #endif
 	&tegra_ahub_device,
+	&tegra_dam_device0,
+	&tegra_dam_device1,
+	&tegra_dam_device2,
 	&tegra_i2s_device1,
+	&tegra_i2s_device3,
 	&tegra_spdif_device,
 	&spdif_dit_device,
+	&bluetooth_dit_device,
+	&cardhu_bcm4329_rfkill_device,
 	&tegra_pcm_device,
 	&cardhu_audio_device,
+	&tegra_hda_device,
 #if defined(CONFIG_CRYPTO_DEV_TEGRA_AES)
 	&tegra_aes_device,
 #endif
@@ -774,56 +726,10 @@ static struct tegra_ehci_platform_data tegra_ehci_pdata[] = {
 	},
 };
 
-static struct platform_device *tegra_usb_otg_host_register(void)
-{
-	struct platform_device *pdev;
-	void *platform_data;
-	int val;
-
-	pdev = platform_device_alloc(tegra_ehci1_device.name,
-		tegra_ehci1_device.id);
-	if (!pdev)
-		return NULL;
-
-	val = platform_device_add_resources(pdev, tegra_ehci1_device.resource,
-		tegra_ehci1_device.num_resources);
-	if (val)
-		goto error;
-
-	pdev->dev.dma_mask =  tegra_ehci1_device.dev.dma_mask;
-	pdev->dev.coherent_dma_mask = tegra_ehci1_device.dev.coherent_dma_mask;
-
-	platform_data = kmalloc(sizeof(struct tegra_ehci_platform_data),
-		GFP_KERNEL);
-	if (!platform_data)
-		goto error;
-
-	memcpy(platform_data, &tegra_ehci_pdata[0],
-				sizeof(struct tegra_ehci_platform_data));
-	pdev->dev.platform_data = platform_data;
-
-	val = platform_device_add(pdev);
-	if (val)
-		goto error_add;
-
-	return pdev;
-
-error_add:
-	kfree(platform_data);
-error:
-	pr_err("%s: failed to add the host contoller device\n", __func__);
-	platform_device_put(pdev);
-	return NULL;
-}
-
-static void tegra_usb_otg_host_unregister(struct platform_device *pdev)
-{
-	platform_device_unregister(pdev);
-}
-
-
-#define SERIAL_NUMBER_LENGTH 20
-static char usb_serial_num[SERIAL_NUMBER_LENGTH];
+static struct tegra_otg_platform_data tegra_otg_pdata = {
+	.ehci_device = &tegra_ehci1_device,
+	.ehci_pdata = &tegra_ehci_pdata[0],
+};
 
 #ifdef CONFIG_USB_SUPPORT
 static struct usb_phy_plat_data tegra_usb_phy_pdata[] = {
@@ -843,28 +749,41 @@ static struct usb_phy_plat_data tegra_usb_phy_pdata[] = {
 	},
 };
 
-static struct tegra_otg_platform_data tegra_otg_pdata = {
-	.host_register = &tegra_usb_otg_host_register,
-	.host_unregister = &tegra_usb_otg_host_unregister,
-};
-
-static int cardu_usb_hsic_postsupend(void)
+static int cardhu_usb_hsic_postsupend(void)
 {
+#ifdef CONFIG_TEGRA_BB_XMM_POWER
 	baseband_xmm_set_power_status(BBXMM_PS_L2);
+#endif
 	return 0;
 }
 
-static int cardu_usb_hsic_preresume(void)
+static int cardhu_usb_hsic_preresume(void)
 {
+#ifdef CONFIG_TEGRA_BB_XMM_POWER
 	baseband_xmm_set_power_status(BBXMM_PS_L2TOL0);
+#endif
+	return 0;
+}
+
+static int cardhu_usb_hsic_phy_ready(void)
+{
+#ifdef CONFIG_TEGRA_BB_XMM_POWER
+	baseband_xmm_set_power_status(BBXMM_PS_L0);
+#endif
+	return 0;
+}
+
+static int cardhu_usb_hsic_phy_off(void)
+{
+#ifdef CONFIG_TEGRA_BB_XMM_POWER
+	baseband_xmm_set_power_status(BBXMM_PS_L3);
+#endif
 	return 0;
 }
 
 static void cardhu_usb_init(void)
 {
 	struct board_info bi;
-	char *src = NULL;
-	int i;
 
 	tegra_get_board_info(&bi);
 
@@ -884,8 +803,10 @@ static void cardhu_usb_init(void)
 	} else if (bi.board_id == BOARD_E1186) {
 		/* for baseband devices do not switch off phy during suspend */
 		tegra_ehci_uhsic_pdata.power_down_on_bus_suspend = 0;
-		uhsic_phy_config.postsuspend = cardu_usb_hsic_postsupend;
-		uhsic_phy_config.preresume = cardu_usb_hsic_preresume;
+		uhsic_phy_config.postsuspend = cardhu_usb_hsic_postsupend;
+		uhsic_phy_config.preresume = cardhu_usb_hsic_preresume;
+		uhsic_phy_config.usb_phy_ready = cardhu_usb_hsic_phy_ready;
+		uhsic_phy_config.post_phy_off = cardhu_usb_hsic_phy_off;
 		tegra_ehci2_device.dev.platform_data = &tegra_ehci_uhsic_pdata;
 		/* baseband registration happens in baseband-xmm-power  */
 	} else {
@@ -895,20 +816,6 @@ static void cardhu_usb_init(void)
 
 	tegra_ehci3_device.dev.platform_data = &tegra_ehci_pdata[2];
 	platform_device_register(&tegra_ehci3_device);
-
-#ifdef CONFIG_USB_ANDROID_RNDIS
-	src = usb_serial_num;
-
-	/* create a fake MAC address from our serial number.
-	 * first byte is 0x02 to signify locally administered.
-	 */
-	rndis_pdata.ethaddr[0] = 0x02;
-	for (i = 0; *src; i++) {
-		/* XOR the USB serial across the remaining bytes */
-		rndis_pdata.ethaddr[i % (ETH_ALEN - 1) + 1] ^= *src++;
-	}
-	platform_device_register(&rndis_device);
-#endif
 }
 #else
 static void cardhu_usb_init(void) { }
@@ -918,6 +825,13 @@ static void cardhu_gps_init(void)
 {
 	tegra_gpio_enable(TEGRA_GPIO_PU2);
 	tegra_gpio_enable(TEGRA_GPIO_PU3);
+}
+
+static void cardhu_nfc_init(void)
+{
+	tegra_gpio_enable(TEGRA_GPIO_PX0);
+	tegra_gpio_enable(TEGRA_GPIO_PP3);
+	tegra_gpio_enable(TEGRA_GPIO_PO7);
 }
 
 static struct baseband_power_platform_data tegra_baseband_power_data = {
@@ -951,6 +865,31 @@ static struct platform_device tegra_baseband_power2_device = {
 	},
 };
 
+
+static struct tegra_pci_platform_data cardhu_pci_platform_data = {
+	.port_status[0]	= 1,
+	.port_status[1]	= 1,
+	.port_status[2]	= 1,
+	.use_dock_detect	= 0,
+	.gpio		= 0,
+};
+
+static void cardhu_pci_init(void)
+{
+	struct board_info board_info;
+
+	tegra_get_board_info(&board_info);
+	if (board_info.board_id == BOARD_E1291) {
+		cardhu_pci_platform_data.port_status[0] = 0;
+		cardhu_pci_platform_data.port_status[1] = 0;
+		cardhu_pci_platform_data.port_status[2] = 1;
+		cardhu_pci_platform_data.use_dock_detect = 1;
+		cardhu_pci_platform_data.gpio = DOCK_DETECT_GPIO;
+	}
+	tegra_pci_device.dev.platform_data = &cardhu_pci_platform_data;
+	platform_device_register(&tegra_pci_device);
+}
+
 static void cardhu_modem_init(void)
 {
 	struct board_info board_info;
@@ -976,7 +915,7 @@ static void cardhu_modem_init(void)
 		else
 			gpio_direction_input(w_disable_gpio);
 
-		/* E1291-A04 & E1198:A02: Set PERST signal to low */
+		/* E1291-A04 & E1198:A02: Set PERST signal to high */
 		if (((board_info.board_id == BOARD_E1291) &&
 				(board_info.fab >= BOARD_FAB_A04)) ||
 			((board_info.board_id == BOARD_E1198) &&
@@ -987,7 +926,7 @@ static void cardhu_modem_init(void)
 					"TEGRA_GPIO_PH7\n", __func__);
 				break;
 			}
-			gpio_direction_output(TEGRA_GPIO_PH7, 0);
+			gpio_direction_output(TEGRA_GPIO_PH7, 1);
 			tegra_gpio_enable(TEGRA_GPIO_PH7);
 		}
 		break;
@@ -1024,6 +963,7 @@ static void cardhu_sata_init(void) { }
 
 static void __init tegra_cardhu_init(void)
 {
+	tegra_thermal_init(&thermal_data);
 	tegra_clk_init_from_table(cardhu_clk_init_table);
 	cardhu_pinmux_init();
 	cardhu_i2c_init();
@@ -1033,8 +973,6 @@ static void __init tegra_cardhu_init(void)
 	cardhu_edp_init();
 #endif
 	cardhu_uart_init();
-	snprintf(usb_serial_num, sizeof(usb_serial_num), "%016llx", tegra_chip_uid());
-	andusb_plat.serial_number = kstrdup(usb_serial_num, GFP_KERNEL);
 	cardhu_tsensor_init();
 	platform_add_devices(cardhu_devices, ARRAY_SIZE(cardhu_devices));
 	cardhu_sdhci_init();
@@ -1051,13 +989,17 @@ static void __init tegra_cardhu_init(void)
 	cardhu_panel_init();
 	cardhu_pmon_init();
 	cardhu_sensors_init();
-	cardhu_bt_rfkill();
-	tegra_setup_bluesleep();
+	cardhu_setup_bluesleep();
 	cardhu_sata_init();
 	//audio_wired_jack_init();
 	cardhu_pins_state_init();
 	cardhu_emc_init();
 	tegra_release_bootloader_fb();
+	cardhu_nfc_init();
+	cardhu_pci_init();
+#ifdef CONFIG_TEGRA_WDT_RECOVERY
+	tegra_wdt_recovery_init();
+#endif
 }
 
 static void __init cardhu_ramconsole_reserve(unsigned long size)
@@ -1083,7 +1025,8 @@ static void __init cardhu_ramconsole_reserve(unsigned long size)
 static void __init tegra_cardhu_reserve(void)
 {
 #if defined(CONFIG_NVMAP_CONVERT_CARVEOUT_TO_IOVMM)
-	tegra_reserve(0, SZ_8M, SZ_8M);
+	/* support 1920X1200 with 24bpp */
+	tegra_reserve(0, SZ_8M + SZ_1M, SZ_8M + SZ_1M);
 #else
 	tegra_reserve(SZ_128M, SZ_8M, SZ_8M);
 #endif

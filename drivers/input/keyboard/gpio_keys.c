@@ -28,11 +28,20 @@
 #include <linux/workqueue.h>
 #include <linux/gpio.h>
 
+#if defined(CONFIG_MACH_PICASSO2) || defined(CONFIG_MACH_PICASSO_M)
+#define KEY_POWER 116
+#define POWER_KEY_ACT 0
+extern int p2_wakeup;
+#endif
+
 struct gpio_button_data {
 	struct gpio_keys_button *button;
 	struct input_dev *input;
 	struct timer_list timer;
 	struct work_struct work;
+#ifdef CONFIG_VIDEO_LTC3216
+	struct timer_list ltc3216_timer;
+#endif
 	int timer_debounce;	/* in msecs */
 	bool disabled;
 };
@@ -45,6 +54,10 @@ struct gpio_keys_drvdata {
 	void (*disable)(struct device *dev);
 	struct gpio_button_data data[0];
 };
+
+#ifdef CONFIG_VIDEO_LTC3216
+extern void ltc3216_turn_off_torch(void);
+#endif
 
 /*
  * SYSFS interface for enabling/disabling keys and switches:
@@ -274,6 +287,25 @@ ATTR_SHOW_FN(disabled_switches, EV_SW, true);
 static DEVICE_ATTR(keys, S_IRUGO, gpio_keys_show_keys, NULL);
 static DEVICE_ATTR(switches, S_IRUGO, gpio_keys_show_switches, NULL);
 
+#if defined(CONFIG_ARCH_ACER_T20)
+#ifdef CONFIG_DOCK_V1
+static ssize_t gpio_keys_powerkey(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct gpio_keys_drvdata *ddata = platform_get_drvdata(pdev);
+	struct input_dev *input = ddata->input;
+
+	input_report_key( input, KEY_POWER, 1);
+	input_sync( input );
+	input_report_key( input, KEY_POWER, 0);
+	input_sync( input );
+
+	return 0;
+}
+static DEVICE_ATTR(powerkey, S_IRUGO | S_IWUSR , gpio_keys_powerkey, gpio_keys_powerkey);
+#endif
+#endif
+
 #define ATTR_STORE_FN(name, type)					\
 static ssize_t gpio_keys_store_##name(struct device *dev,		\
 				      struct device_attribute *attr,	\
@@ -312,6 +344,11 @@ static struct attribute *gpio_keys_attrs[] = {
 	&dev_attr_switches.attr,
 	&dev_attr_disabled_keys.attr,
 	&dev_attr_disabled_switches.attr,
+#if defined(CONFIG_ARCH_ACER_T20)
+#ifdef CONFIG_DOCK_V1
+	&dev_attr_powerkey.attr,
+#endif
+#endif
 	NULL,
 };
 
@@ -324,7 +361,32 @@ static void gpio_keys_report_event(struct gpio_button_data *bdata)
 	struct gpio_keys_button *button = bdata->button;
 	struct input_dev *input = bdata->input;
 	unsigned int type = button->type ?: EV_KEY;
-	int state = (gpio_get_value_cansleep(button->gpio) ? 1 : 0) ^ button->active_low;
+#if defined(CONFIG_MACH_PICASSO2) || defined(CONFIG_MACH_PICASSO_M)
+	int state;
+	if ((p2_wakeup == POWER_KEY_ACT) && (button->code == KEY_POWER))
+	{
+		state = p2_wakeup ^ button->active_low;
+		p2_wakeup = 1;
+	}
+	else
+	{
+		state = (gpio_get_value(button->gpio) ? 1 : 0) ^ button->active_low;
+	}
+#else
+	int state = (gpio_get_value(button->gpio) ? 1 : 0) ^ button->active_low;
+#endif
+#if defined(CONFIG_ARCH_ACER_T20)
+	pr_info("%s: button->code = %d, state = %d\n", __func__, button->code, !!state);
+#endif
+
+#ifdef CONFIG_VIDEO_LTC3216
+	if (button->code == 116 /* KEY_POWER */ ) {
+		if (state)
+			mod_timer(&bdata->ltc3216_timer, jiffies + msecs_to_jiffies(4000));
+		else
+			del_timer(&bdata->ltc3216_timer);
+	}
+#endif
 
 	input_event(input, type, button->code, !!state);
 	input_sync(input);
@@ -345,11 +407,24 @@ static void gpio_keys_timer(unsigned long _data)
 	schedule_work(&data->work);
 }
 
+#ifdef CONFIG_VIDEO_LTC3216
+static void ltc3216_timer_func(unsigned long _data)
+{
+	struct gpio_button_data *data = (struct gpio_button_data *)_data;
+	int state = gpio_get_value(data->button->gpio) ? 1 : 0;
+	if (state)
+		ltc3216_turn_off_torch();
+}
+#endif
+
 static irqreturn_t gpio_keys_isr(int irq, void *dev_id)
 {
 	struct gpio_button_data *bdata = dev_id;
 	struct gpio_keys_button *button = bdata->button;
 
+#if defined(CONFIG_ARCH_ACER_T20)
+	pr_info("%s: button->gpio = %d\n", __func__, button->gpio);
+#endif
 	BUG_ON(irq != gpio_to_irq(button->gpio));
 
 	if (bdata->timer_debounce)
@@ -372,6 +447,10 @@ static int __devinit gpio_keys_setup_key(struct platform_device *pdev,
 
 	setup_timer(&bdata->timer, gpio_keys_timer, (unsigned long)bdata);
 	INIT_WORK(&bdata->work, gpio_keys_work_func);
+
+#ifdef CONFIG_VIDEO_LTC3216
+	setup_timer(&bdata->ltc3216_timer, ltc3216_timer_func, (unsigned long)bdata);
+#endif
 
 	error = gpio_request(button->gpio, desc);
 	if (error < 0) {
@@ -599,6 +678,10 @@ static int gpio_keys_resume(struct device *dev)
 	int wakeup_key = KEY_RESERVED;
 	int i;
 
+#if defined(CONFIG_ARCH_ACER_T20)
+	pr_info("%s\n", __func__);
+#endif
+
 	if (pdata->wakeup_key)
 		wakeup_key = pdata->wakeup_key();
 
@@ -612,12 +695,14 @@ static int gpio_keys_resume(struct device *dev)
 			if (wakeup_key == button->code) {
 				unsigned int type = button->type ?: EV_KEY;
 
+#if defined(CONFIG_ARCH_ACER_T20)
+				pr_info("%s: wakeup_key is pressed\n", __func__);
+#endif
 				input_event(ddata->input, type, button->code, 1);
 				input_event(ddata->input, type, button->code, 0);
 				input_sync(ddata->input);
 			}
 		}
-
 		gpio_keys_report_event(&ddata->data[i]);
 	}
 	input_sync(ddata->input);

@@ -52,6 +52,10 @@
 #include "tegra_pcm.h"
 #include "tegra_asoc_utils.h"
 
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+#include "tegra20_das.h"
+#endif
+
 #define DRV_NAME "tegra-snd-wm8753"
 
 #define GPIO_SPKR_EN    BIT(0)
@@ -75,9 +79,8 @@ static int tegra_wm8753_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_codec *codec = rtd->codec;
 	struct snd_soc_card *card = codec->card;
 	struct tegra_wm8753 *machine = snd_soc_card_get_drvdata(card);
-	int srate, mclk;
+	int srate, mclk, i2s_daifmt;
 	int err;
-
 	srate = params_rate(params);
 	switch (srate) {
 	case 8000:
@@ -102,23 +105,32 @@ static int tegra_wm8753_hw_params(struct snd_pcm_substream *substream,
 
 	err = tegra_asoc_utils_set_rate(&machine->util_data, srate, mclk);
 	if (err < 0) {
-		dev_err(card->dev, "Can't configure clocks\n");
-		return err;
+		if (!(machine->util_data.set_mclk % mclk))
+			mclk = machine->util_data.set_mclk;
+		else {
+			dev_err(card->dev, "Can't configure clocks\n");
+			return err;
+		}
 	}
 
-	err = snd_soc_dai_set_fmt(codec_dai,
-					SND_SOC_DAIFMT_I2S |
-					SND_SOC_DAIFMT_NB_NF |
-					SND_SOC_DAIFMT_CBS_CFS);
+	tegra_asoc_utils_lock_clk_rate(&machine->util_data, 1);
+
+	i2s_daifmt = SND_SOC_DAIFMT_NB_NF |
+		     SND_SOC_DAIFMT_CBS_CFS;
+
+	/* Use DSP mode for mono on Tegra20 */
+	if ((params_channels(params) != 2) && machine_is_whistler())
+		i2s_daifmt |= SND_SOC_DAIFMT_DSP_A;
+	else
+		i2s_daifmt |= SND_SOC_DAIFMT_I2S;
+
+	err = snd_soc_dai_set_fmt(codec_dai, i2s_daifmt);
 	if (err < 0) {
 		dev_err(card->dev, "codec_dai fmt not set\n");
 		return err;
 	}
 
-	err = snd_soc_dai_set_fmt(cpu_dai,
-					SND_SOC_DAIFMT_I2S |
-					SND_SOC_DAIFMT_NB_NF |
-					SND_SOC_DAIFMT_CBS_CFS);
+	err = snd_soc_dai_set_fmt(cpu_dai, i2s_daifmt);
 	if (err < 0) {
 		dev_err(card->dev, "cpu_dai fmt not set\n");
 		return err;
@@ -131,14 +143,182 @@ static int tegra_wm8753_hw_params(struct snd_pcm_substream *substream,
 		return err;
 	}
 
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	err = tegra20_das_connect_dac_to_dap(TEGRA20_DAS_DAP_SEL_DAC1,
+					TEGRA20_DAS_DAP_ID_1);
+	if (err < 0) {
+		dev_err(card->dev, "failed to set dap-dac path\n");
+		return err;
+	}
+
+	err = tegra20_das_connect_dap_to_dac(TEGRA20_DAS_DAP_ID_1,
+					TEGRA20_DAS_DAP_SEL_DAC1);
+	if (err < 0) {
+		dev_err(card->dev, "failed to set dac-dap path\n");
+		return err;
+	}
+#endif
 	return 0;
+}
+
+static int tegra_bt_sco_hw_params(struct snd_pcm_substream *substream,
+					struct snd_pcm_hw_params *params)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_card *card = codec->card;
+	struct tegra_wm8753 *machine = snd_soc_card_get_drvdata(card);
+	int srate, mclk, min_mclk;
+	int err;
+
+	srate = params_rate(params);
+	switch (srate) {
+	case 11025:
+	case 22050:
+	case 44100:
+	case 88200:
+		mclk = 11289600;
+		break;
+	case 8000:
+	case 16000:
+	case 32000:
+	case 48000:
+	case 64000:
+	case 96000:
+		mclk = 12288000;
+		break;
+	default:
+		return -EINVAL;
+	}
+	min_mclk = 64 * srate;
+
+	err = tegra_asoc_utils_set_rate(&machine->util_data, srate, mclk);
+	if (err < 0) {
+		if (!(machine->util_data.set_mclk % min_mclk))
+			mclk = machine->util_data.set_mclk;
+		else {
+			dev_err(card->dev, "Can't configure clocks\n");
+			return err;
+		}
+	}
+
+	tegra_asoc_utils_lock_clk_rate(&machine->util_data, 1);
+
+	err = snd_soc_dai_set_fmt(cpu_dai,
+					SND_SOC_DAIFMT_DSP_A |
+					SND_SOC_DAIFMT_NB_NF |
+					SND_SOC_DAIFMT_CBS_CFS);
+	if (err < 0) {
+		dev_err(card->dev, "cpu_dai fmt not set\n");
+		return err;
+	}
+
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	err = tegra20_das_connect_dac_to_dap(TEGRA20_DAS_DAP_SEL_DAC2,
+					TEGRA20_DAS_DAP_ID_4);
+	if (err < 0) {
+		dev_err(card->dev, "failed to set dac-dap path\n");
+		return err;
+	}
+
+	err = tegra20_das_connect_dap_to_dac(TEGRA20_DAS_DAP_ID_4,
+					TEGRA20_DAS_DAP_SEL_DAC2);
+	if (err < 0) {
+		dev_err(card->dev, "failed to set dac-dap path\n");
+		return err;
+	}
+#endif
+	return 0;
+}
+
+static int tegra_spdif_hw_params(struct snd_pcm_substream *substream,
+					struct snd_pcm_hw_params *params)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_card *card = rtd->card;
+	struct tegra_wm8753 *machine = snd_soc_card_get_drvdata(card);
+	int srate, mclk, min_mclk;
+	int err;
+
+	srate = params_rate(params);
+	switch (srate) {
+	case 11025:
+	case 22050:
+	case 44100:
+	case 88200:
+		mclk = 11289600;
+		break;
+	case 8000:
+	case 16000:
+	case 32000:
+	case 48000:
+	case 64000:
+	case 96000:
+		mclk = 12288000;
+		break;
+	default:
+		return -EINVAL;
+	}
+	min_mclk = 128 * srate;
+
+	err = tegra_asoc_utils_set_rate(&machine->util_data, srate, mclk);
+	if (err < 0) {
+		if (!(machine->util_data.set_mclk % min_mclk))
+			mclk = machine->util_data.set_mclk;
+		else {
+			dev_err(card->dev, "Can't configure clocks\n");
+			return err;
+		}
+	}
+
+	tegra_asoc_utils_lock_clk_rate(&machine->util_data, 1);
+
+	return 0;
+}
+
+static int tegra_hw_free(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct tegra_wm8753 *machine = snd_soc_card_get_drvdata(rtd->card);
+
+	tegra_asoc_utils_lock_clk_rate(&machine->util_data, 0);
+
+	return 0;
+}
+
+static int tegra_wm8753_startup(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct tegra_wm8753 *machine = snd_soc_card_get_drvdata(rtd->card);
+
+	return regulator_enable(machine->audio_reg);
+}
+
+static void tegra_wm8753_shutdown(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct tegra_wm8753 *machine = snd_soc_card_get_drvdata(rtd->card);
+
+	regulator_disable(machine->audio_reg);
 }
 
 static struct snd_soc_ops tegra_wm8753_ops = {
 	.hw_params = tegra_wm8753_hw_params,
+	.hw_free = tegra_hw_free,
+	.startup = tegra_wm8753_startup,
+	.shutdown = tegra_wm8753_shutdown,
 };
 
-static struct snd_soc_ops tegra_spdif_ops;
+static struct snd_soc_ops tegra_bt_sco_ops = {
+	.hw_params = tegra_bt_sco_hw_params,
+	.hw_free = tegra_hw_free,
+};
+
+static struct snd_soc_ops tegra_spdif_ops = {
+	.hw_params = tegra_spdif_hw_params,
+	.hw_free = tegra_hw_free,
+};
 
 static struct snd_soc_jack tegra_wm8753_hp_jack;
 
@@ -272,14 +452,6 @@ static int tegra_wm8753_init(struct snd_soc_pcm_runtime *rtd)
 			ret = PTR_ERR(machine->audio_reg);
 			return ret;
 		}
-
-		ret = regulator_enable(machine->audio_reg);
-		if (ret) {
-			dev_err(card->dev, "cannot enable avddio_audio reg\n");
-			regulator_put(machine->audio_reg);
-			machine->audio_reg = NULL;
-			return ret;
-		}
 	}
 
 	if (gpio_is_valid(pdata->gpio_spkr_en)) {
@@ -376,12 +548,23 @@ static struct snd_soc_dai_link tegra_wm8753_dai[] = {
 	{
 		.name = "SPDIF",
 		.stream_name = "SPDIF PCM",
-		.codec_name = "spdif-dit",
+		.codec_name = "spdif-dit.0",
 		.platform_name = "tegra-pcm-audio",
 		.cpu_dai_name = "tegra20-spdif",
 		.codec_dai_name = "dit-hifi",
 		.ops = &tegra_spdif_ops,
-	}
+	},
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	{
+		.name = "BT-SCO",
+		.stream_name = "BT SCO PCM",
+		.codec_name = "spdif-dit.1",
+		.platform_name = "tegra-pcm-audio",
+		.cpu_dai_name = "tegra20-i2s.1",
+		.codec_dai_name = "dit-hifi",
+		.ops = &tegra_bt_sco_ops,
+	},
+#endif
 };
 
 static struct snd_soc_card snd_soc_tegra_wm8753 = {
@@ -396,6 +579,7 @@ static __devinit int tegra_wm8753_driver_probe(struct platform_device *pdev)
 	struct tegra_wm8753 *machine;
 	struct tegra_wm8753_platform_data *pdata;
 	int ret;
+
 
 	pdata = pdev->dev.platform_data;
 	if (!pdata) {
@@ -426,12 +610,16 @@ static __devinit int tegra_wm8753_driver_probe(struct platform_device *pdev)
 		goto err_fini_utils;
 	}
 
+	if (!card->instantiated) {
+		dev_err(&pdev->dev, "No WM8753 codec\n");
+		goto err_unregister_card;
+	}
+
 #ifdef CONFIG_SWITCH
 	/* Add h2w swith class support */
 	ret = switch_dev_register(&wired_switch_dev);
 	if (ret < 0) {
-		dev_err(&pdev->dev, "not able to register switch device\n",
-			ret);
+		dev_err(&pdev->dev, "not able to register switch device\n");
 		goto err_unregister_card;
 	}
 #endif

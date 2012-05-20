@@ -214,6 +214,9 @@ int scsi_execute(struct scsi_device *sdev, const unsigned char *cmd,
 
 	req = blk_get_request(sdev->request_queue, write, __GFP_WAIT);
 
+	if (!req)
+		return ret;
+
 	if (bufflen &&	blk_rq_map_kern(sdev->request_queue, req,
 					buffer, bufflen, __GFP_WAIT))
 		goto out;
@@ -1246,6 +1249,11 @@ int scsi_prep_fn(struct request_queue *q, struct request *req)
 {
 	struct scsi_device *sdev = q->queuedata;
 	int ret = BLKPREP_KILL;
+
+#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
+	if (!sdev)
+		return ret;
+#endif
 
 	if (req->cmd_type == REQ_TYPE_BLOCK_PC)
 		ret = scsi_setup_blk_pc_cmnd(sdev, req);

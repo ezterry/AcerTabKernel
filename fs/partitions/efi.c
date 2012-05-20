@@ -100,6 +100,10 @@
 #include "check.h"
 #include "efi.h"
 
+#ifdef CONFIG_ARCH_ACER_T20
+extern unsigned int boot_partition_sectors;
+#endif
+
 /* This allows a kernel command line option 'gpt' to override
  * the test for invalid PMBR.  Not __initdata because reloading
  * the partition tables happens after init too.
@@ -566,6 +570,14 @@ static int find_valid_gpt(struct parsed_partitions *state, gpt_header **gpt,
 
 	if (!good_agpt && force_gpt && force_gpt_sector)
 		good_agpt = is_gpt_valid(state, force_gpt_sector, &agpt, &aptes);
+
+#ifdef CONFIG_ARCH_ACER_T20
+	if (!good_agpt && !strncmp(state->pp_buf, " mmcblk0", 8)) {
+		force_gpt_sector = lastlba - boot_partition_sectors;
+		good_agpt = is_gpt_valid(state, force_gpt_sector, &agpt, &aptes);
+		printk(KERN_INFO "Use K36 AGPT, good_agpt = %d, force_gpt_sector = %lld\n", good_agpt, (unsigned long long)force_gpt_sector);
+	}
+#endif
 
         /* The obviously unsuccessful case */
         if (!good_pgpt && !good_agpt)

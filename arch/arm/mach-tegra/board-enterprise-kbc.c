@@ -70,8 +70,9 @@ static struct tegra_kbc_wake_key enterprise_wake_cfg[] = {
 };
 
 static struct tegra_kbc_platform_data enterprise_kbc_platform_data = {
-	.debounce_cnt = 2,
-	.repeat_cnt = 5 * 32,
+	.debounce_cnt = 20,
+	.repeat_cnt = 1,
+	.scan_count = 30,
 	.wakeup = true,
 	.keymap_data = &keymap_data,
 	.wake_cnt = 4,
@@ -86,14 +87,16 @@ int __init enterprise_kbc_init(void)
 	pr_info("Registering tegra-kbc\n");
 
 	BUG_ON((KBC_MAX_ROW + KBC_MAX_COL) > KBC_MAX_GPIO);
-	for (i = 0; i < KBC_MAX_ROW; i++) {
+	for (i = 0; i < ENTERPRISE_ROW_COUNT; i++) {
 		data->pin_cfg[i].num = i;
 		data->pin_cfg[i].is_row = true;
+		data->pin_cfg[i].en = true;
+	}
+	for (i = 0; i < ENTERPRISE_COL_COUNT; i++) {
+		data->pin_cfg[i + KBC_PIN_GPIO_16].num = i;
+		data->pin_cfg[i + KBC_PIN_GPIO_16].en = true;
 	}
 
-	for (i = 0; i < KBC_MAX_COL; i++) {
-		data->pin_cfg[i + KBC_MAX_ROW].num = i;
-	}
 	platform_device_register(&tegra_kbc_device);
 	pr_info("Registering successful tegra-kbc\n");
 	return 0;

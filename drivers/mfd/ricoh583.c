@@ -35,6 +35,9 @@
 #include <linux/mfd/core.h>
 #include <linux/mfd/ricoh583.h>
 
+#define RICOH_ONOFFSEL_REG	0x10
+#define RICOH_SWCTL_REG		0x5E
+
 /* Interrupt enable register */
 #define RICOH583_INT_EN_SYS1	0x19
 #define RICOH583_INT_EN_SYS2	0x1D
@@ -97,6 +100,11 @@ struct ricoh583_irq_data {
 	int	grp_index;
 };
 
+struct deepsleep_control_data {
+	u8 reg_add;
+	u8 ds_pos_bit;
+};
+
 #define RICOH583_IRQ(_int_type, _master_bit, _grp_index, _int_bit, _mask_ind) \
 	{						\
 		.int_type	= _int_type,		\
@@ -153,8 +161,37 @@ static const struct ricoh583_irq_data ricoh583_irqs[] = {
 	[RICOH583_NR_IRQS]		= RICOH583_IRQ(GPIO_INT, 4, 8, 8, 7),
 };
 
+#define DEEPSLEEP_INIT(_id, _reg, _pos)		\
+	[RICOH583_DS_##_id] = {.reg_add = _reg, .ds_pos_bit = _pos}
+
+static struct deepsleep_control_data deepsleep_data[] = {
+	DEEPSLEEP_INIT(DC1, 0x21, 4),
+	DEEPSLEEP_INIT(DC2, 0x22, 0),
+	DEEPSLEEP_INIT(DC3, 0x22, 4),
+	DEEPSLEEP_INIT(LDO0, 0x23, 0),
+	DEEPSLEEP_INIT(LDO1, 0x23, 4),
+	DEEPSLEEP_INIT(LDO2, 0x24, 0),
+	DEEPSLEEP_INIT(LDO3, 0x24, 4),
+	DEEPSLEEP_INIT(LDO4, 0x25, 0),
+	DEEPSLEEP_INIT(LDO5, 0x25, 4),
+	DEEPSLEEP_INIT(LDO6, 0x26, 0),
+	DEEPSLEEP_INIT(LDO7, 0x26, 4),
+	DEEPSLEEP_INIT(LDO8, 0x27, 0),
+	DEEPSLEEP_INIT(LDO9, 0x27, 4),
+	DEEPSLEEP_INIT(PSO0, 0x28, 0),
+	DEEPSLEEP_INIT(PSO1, 0x28, 4),
+	DEEPSLEEP_INIT(PSO2, 0x29, 0),
+	DEEPSLEEP_INIT(PSO3, 0x29, 4),
+	DEEPSLEEP_INIT(PSO4, 0x2A, 0),
+	DEEPSLEEP_INIT(PSO5, 0x2A, 4),
+	DEEPSLEEP_INIT(PSO6, 0x2B, 0),
+	DEEPSLEEP_INIT(PSO7, 0x2B, 4),
+};
+
 #define MAX_INTERRUPT_MASKS	8
 #define MAX_MAIN_INTERRUPT	5
+#define EXT_PWR_REQ		\
+	(RICOH583_EXT_PWRREQ1_CONTROL | RICOH583_EXT_PWRREQ2_CONTROL)
 
 struct ricoh583 {
 	struct device		*dev;
@@ -272,7 +309,7 @@ int ricoh583_write(struct device *dev, u8 reg, uint8_t val)
 }
 EXPORT_SYMBOL_GPL(ricoh583_write);
 
-int ricoh583_bulk_writes(struct device *dev, u8 reg, int len, uint8_t *val)
+int ricoh583_bulk_writes(struct device *dev, u8 reg, u8 len, uint8_t *val)
 {
 	struct ricoh583 *ricoh583 = dev_get_drvdata(dev);
 	int ret = 0;
@@ -291,7 +328,7 @@ int ricoh583_read(struct device *dev, u8 reg, uint8_t *val)
 }
 EXPORT_SYMBOL_GPL(ricoh583_read);
 
-int ricoh583_bulk_reads(struct device *dev, u8 reg, int len, uint8_t *val)
+int ricoh583_bulk_reads(struct device *dev, u8 reg, u8 len, uint8_t *val)
 {
 	return __ricoh583_bulk_reads(to_i2c_client(dev), reg, len, val);
 }
@@ -363,6 +400,131 @@ out:
 }
 EXPORT_SYMBOL_GPL(ricoh583_update);
 
+static int __ricoh583_set_ext_pwrreq1_control(struct device *dev,
+	enum ricoh583_deepsleep_control_id id,
+	enum ricoh583_ext_pwrreq_control ext_pwr, int slots)
+{
+	int ret;
+	uint8_t sleepseq_val;
+	u8 en_bit;
+	u8 slot_bit;
+
+	if (!(ext_pwr & RICOH583_EXT_PWRREQ1_CONTROL))
+		return 0;
+
+	if (id == RICOH583_DS_DC0) {
+		dev_err(dev, "PWRREQ1 is invalid control for rail %d\n", id);
+		return -EINVAL;
+	}
+
+	en_bit = deepsleep_data[id].ds_pos_bit;
+	slot_bit = en_bit + 1;
+	ret = ricoh583_read(dev, deepsleep_data[id].reg_add, &sleepseq_val);
+	if (ret < 0) {
+		dev_err(dev, "Error in reading reg 0x%x\n",
+				deepsleep_data[id].reg_add);
+		return ret;
+	}
+
+	sleepseq_val &= ~(0xF << en_bit);
+	sleepseq_val |= (1 << en_bit);
+	sleepseq_val |= ((slots & 0x7) << slot_bit);
+	ret = ricoh583_set_bits(dev, RICOH_ONOFFSEL_REG, (1 << 1));
+	if (ret < 0) {
+		dev_err(dev, "Error in updating the 0x%02x register\n",
+				RICOH_ONOFFSEL_REG);
+		return ret;
+	}
+
+	ret = ricoh583_write(dev, deepsleep_data[id].reg_add, sleepseq_val);
+	if (ret < 0) {
+		dev_err(dev, "Error in writing reg 0x%x\n",
+				deepsleep_data[id].reg_add);
+		return ret;
+	}
+
+	if (id == RICOH583_DS_LDO4) {
+		ret = ricoh583_write(dev, RICOH_SWCTL_REG, 0x1);
+		if (ret < 0)
+			dev_err(dev, "Error in writing reg 0x%x\n",
+				RICOH_SWCTL_REG);
+	}
+	return ret;
+}
+
+static int __ricoh583_set_ext_pwrreq2_control(struct device *dev,
+	enum ricoh583_deepsleep_control_id id,
+	enum ricoh583_ext_pwrreq_control ext_pwr)
+{
+	int ret;
+
+	if (!(ext_pwr & RICOH583_EXT_PWRREQ2_CONTROL))
+		return 0;
+
+	if (id != RICOH583_DS_DC0) {
+		dev_err(dev, "PWRREQ2 is invalid control for rail %d\n", id);
+		return -EINVAL;
+	}
+
+	ret = ricoh583_set_bits(dev, RICOH_ONOFFSEL_REG, (1 << 2));
+	if (ret < 0)
+		dev_err(dev, "Error in updating the ONOFFSEL 0x10 register\n");
+	return ret;
+}
+
+int ricoh583_ext_power_req_config(struct device *dev,
+	enum ricoh583_deepsleep_control_id id,
+	enum ricoh583_ext_pwrreq_control ext_pwr_req,
+	int deepsleep_slot_nr)
+{
+	if ((ext_pwr_req & EXT_PWR_REQ) == EXT_PWR_REQ)
+		return -EINVAL;
+
+	if (ext_pwr_req & RICOH583_EXT_PWRREQ1_CONTROL)
+		return __ricoh583_set_ext_pwrreq1_control(dev, id,
+				ext_pwr_req, deepsleep_slot_nr);
+
+	if (ext_pwr_req & RICOH583_EXT_PWRREQ2_CONTROL)
+		return __ricoh583_set_ext_pwrreq2_control(dev,
+			id, ext_pwr_req);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ricoh583_ext_power_req_config);
+
+static int __devinit ricoh583_ext_power_init(struct ricoh583 *ricoh583,
+	struct ricoh583_platform_data *pdata)
+{
+	int ret;
+	int i;
+	uint8_t on_off_val = 0;
+
+	/*  Clear ONOFFSEL register */
+	mutex_lock(&ricoh583->io_lock);
+	if (pdata->enable_shutdown_pin)
+		on_off_val |= 0x1;
+
+	ret = __ricoh583_write(ricoh583->client, RICOH_ONOFFSEL_REG,
+					on_off_val);
+	if (ret < 0)
+		dev_err(ricoh583->dev, "Error in writing reg %d error: "
+				"%d\n", RICOH_ONOFFSEL_REG, ret);
+
+	ret = __ricoh583_write(ricoh583->client, RICOH_SWCTL_REG, 0x0);
+	if (ret < 0)
+		dev_err(ricoh583->dev, "Error in writing reg %d error: "
+				"%d\n", RICOH_SWCTL_REG, ret);
+
+	/* Clear sleepseq register */
+	for (i = 0x21; i < 0x2B; ++i) {
+		ret = __ricoh583_write(ricoh583->client, i, 0x0);
+		if (ret < 0)
+			dev_err(ricoh583->dev, "Error in writing reg 0x%02x "
+				"error: %d\n", i, ret);
+	}
+	mutex_unlock(&ricoh583->io_lock);
+	return 0;
+}
+
 static struct i2c_client *ricoh583_i2c_client;
 int ricoh583_power_off(void)
 {
@@ -390,10 +552,10 @@ static void ricoh583_gpio_set(struct gpio_chip *chip, unsigned offset,
 {
 	struct ricoh583 *ricoh583 = container_of(chip, struct ricoh583, gpio);
 	if (value)
-		ricoh583_clr_bits(ricoh583->dev, RICOH583_GPIO_IOOUT,
+		ricoh583_set_bits(ricoh583->dev, RICOH583_GPIO_IOOUT,
 						1 << offset);
 	else
-		ricoh583_set_bits(ricoh583->dev, RICOH583_GPIO_IOOUT,
+		ricoh583_clr_bits(ricoh583->dev, RICOH583_GPIO_IOOUT,
 						1 << offset);
 }
 
@@ -425,6 +587,31 @@ static int ricoh583_gpio_to_irq(struct gpio_chip *chip, unsigned off)
 	return -EIO;
 }
 
+static int ricoh583_gpio_request(struct gpio_chip *chip, unsigned offset)
+{
+	struct ricoh583 *ricoh583 = container_of(chip, struct ricoh583, gpio);
+	int ret;
+
+	ret = ricoh583_clr_bits(ricoh583->dev, RICOH583_GPIO_PGSEL,
+			1 << offset);
+	if (ret < 0)
+		dev_err(ricoh583->dev, "%s(): The error in writing register "
+			"0x%02x\n", __func__, RICOH583_GPIO_PGSEL);
+	return ret;
+}
+
+static void ricoh583_gpio_free(struct gpio_chip *chip, unsigned offset)
+{
+	struct ricoh583 *ricoh583 = container_of(chip, struct ricoh583, gpio);
+	int ret;
+
+	ret = ricoh583_set_bits(ricoh583->dev, RICOH583_GPIO_PGSEL,
+				1 << offset);
+	if (ret < 0)
+		dev_err(ricoh583->dev, "%s(): The error in writing register "
+			"0x%02x\n", __func__, RICOH583_GPIO_PGSEL);
+}
+
 static void __devinit ricoh583_gpio_init(struct ricoh583 *ricoh583,
 	struct ricoh583_platform_data *pdata)
 {
@@ -434,6 +621,13 @@ static void __devinit ricoh583_gpio_init(struct ricoh583 *ricoh583,
 
 	if (pdata->gpio_base  <= 0)
 		return;
+
+	ret = ricoh583_write(ricoh583->dev, RICOH583_GPIO_PGSEL, 0xEF);
+	if (ret < 0) {
+		dev_err(ricoh583->dev, "%s(): The error in writing register "
+			"0x%02x\n", __func__, RICOH583_GPIO_PGSEL);
+		return;
+	}
 
 	for (i = 0; i < pdata->num_gpioinit_data; ++i) {
 		ginit = &pdata->gpio_init_data[i];
@@ -451,10 +645,10 @@ static void __devinit ricoh583_gpio_init(struct ricoh583 *ricoh583,
 
 		if (ginit->output_mode_en) {
 			if (ginit->output_val)
-				ret = ricoh583_clr_bits(ricoh583->dev,
+				ret = ricoh583_set_bits(ricoh583->dev,
 					RICOH583_GPIO_IOOUT, 1 << i);
 			else
-				ret = ricoh583_set_bits(ricoh583->dev,
+				ret = ricoh583_clr_bits(ricoh583->dev,
 					RICOH583_GPIO_IOOUT, 1 << i);
 			if (!ret)
 				ret = ricoh583_set_bits(ricoh583->dev,
@@ -466,6 +660,13 @@ static void __devinit ricoh583_gpio_init(struct ricoh583 *ricoh583,
 		if (ret < 0)
 			dev_err(ricoh583->dev, "Gpio %d init "
 				"dir configuration failed: %d\n", i, ret);
+
+		ret = ricoh583_clr_bits(ricoh583->dev, RICOH583_GPIO_PGSEL,
+					1 << i);
+		if (ret < 0)
+			dev_err(ricoh583->dev, "%s(): The error in writing "
+				"register 0x%02x\n", __func__,
+				RICOH583_GPIO_PGSEL);
 	}
 
 	ricoh583->gpio.owner		= THIS_MODULE;
@@ -475,6 +676,8 @@ static void __devinit ricoh583_gpio_init(struct ricoh583 *ricoh583,
 	ricoh583->gpio.ngpio		= RICOH583_NR_GPIO;
 	ricoh583->gpio.can_sleep	= 1;
 
+	ricoh583->gpio.request	= ricoh583_gpio_request;
+	ricoh583->gpio.free	= ricoh583_gpio_free;
 	ricoh583->gpio.direction_input	= ricoh583_gpio_input;
 	ricoh583->gpio.direction_output	= ricoh583_gpio_output;
 	ricoh583->gpio.set		= ricoh583_gpio_set;
@@ -486,17 +689,17 @@ static void __devinit ricoh583_gpio_init(struct ricoh583 *ricoh583,
 		dev_warn(ricoh583->dev, "GPIO registration failed: %d\n", ret);
 }
 
-static void ricoh583_irq_lock(unsigned int irq)
+static void ricoh583_irq_lock(struct irq_data *irq_data)
 {
-	struct ricoh583 *ricoh583 = get_irq_chip_data(irq);
+	struct ricoh583 *ricoh583 = irq_data_get_irq_chip_data(irq_data);
 
 	mutex_lock(&ricoh583->irq_lock);
 }
 
-static void ricoh583_irq_unmask(unsigned int irq)
+static void ricoh583_irq_unmask(struct irq_data *irq_data)
 {
-	struct ricoh583 *ricoh583 = get_irq_chip_data(irq);
-	unsigned int __irq = irq - ricoh583->irq_base;
+	struct ricoh583 *ricoh583 = irq_data_get_irq_chip_data(irq_data);
+	unsigned int __irq = irq_data->irq - ricoh583->irq_base;
 	const struct ricoh583_irq_data *data = &ricoh583_irqs[__irq];
 
 	ricoh583->group_irq_en[data->grp_index] |= (1 << data->grp_index);
@@ -506,10 +709,10 @@ static void ricoh583_irq_unmask(unsigned int irq)
 	ricoh583->irq_en_reg[data->mask_reg_index] |= 1 << data->int_en_bit;
 }
 
-static void ricoh583_irq_mask(unsigned int irq)
+static void ricoh583_irq_mask(struct irq_data *irq_data)
 {
-	struct ricoh583 *ricoh583 = get_irq_chip_data(irq);
-	unsigned int __irq = irq - ricoh583->irq_base;
+	struct ricoh583 *ricoh583 = irq_data_get_irq_chip_data(irq_data);
+	unsigned int __irq = irq_data->irq - ricoh583->irq_base;
 	const struct ricoh583_irq_data *data = &ricoh583_irqs[__irq];
 
 	ricoh583->group_irq_en[data->grp_index] &= ~(1 << data->grp_index);
@@ -519,9 +722,9 @@ static void ricoh583_irq_mask(unsigned int irq)
 	ricoh583->irq_en_reg[data->mask_reg_index] &= ~(1 << data->int_en_bit);
 }
 
-static void ricoh583_irq_sync_unlock(unsigned int irq)
+static void ricoh583_irq_sync_unlock(struct irq_data *irq_data)
 {
-	struct ricoh583 *ricoh583 = get_irq_chip_data(irq);
+	struct ricoh583 *ricoh583 = irq_data_get_irq_chip_data(irq_data);
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(ricoh583->gpedge_reg); i++) {
@@ -547,16 +750,16 @@ static void ricoh583_irq_sync_unlock(unsigned int irq)
 	if (ricoh583->intc_inten_reg != ricoh583->intc_inten_cache) {
 		if (!WARN_ON(__ricoh583_write(ricoh583->client,
 				RICOH583_INTC_INTEN, ricoh583->intc_inten_reg)))
-			ricoh583->intc_inten_reg = ricoh583->intc_inten_cache;
+			ricoh583->intc_inten_cache = ricoh583->intc_inten_reg;
 	}
 
 	mutex_unlock(&ricoh583->irq_lock);
 }
 
-static int ricoh583_irq_set_type(unsigned int irq, unsigned int type)
+static int ricoh583_irq_set_type(struct irq_data *irq_data, unsigned int type)
 {
-	struct ricoh583 *ricoh583 = get_irq_chip_data(irq);
-	unsigned int __irq = irq - ricoh583->irq_base;
+	struct ricoh583 *ricoh583 = irq_data_get_irq_chip_data(irq_data);
+	unsigned int __irq = irq_data->irq - ricoh583->irq_base;
 	const struct ricoh583_irq_data *data = &ricoh583_irqs[__irq];
 	int val = 0;
 	int gpedge_index;
@@ -574,7 +777,7 @@ static int ricoh583_irq_set_type(unsigned int irq, unsigned int type)
 
 		ricoh583->gpedge_reg[gpedge_index] &= ~(3 << gpedge_bit_pos);
 		ricoh583->gpedge_reg[gpedge_index] |= (val << gpedge_bit_pos);
-		ricoh583_irq_unmask(irq);
+		ricoh583_irq_unmask(irq_data);
 	}
 	return 0;
 }
@@ -722,7 +925,7 @@ static int __devinit ricoh583_irq_init(struct ricoh583 *ricoh583, int irq,
 				ricoh583->irq_en_add[i],
 				ricoh583->irq_en_reg[i]);
 		if (ret < 0)
-			dev_err(ricoh583->dev, "Error in writin reg 0x%02x "
+			dev_err(ricoh583->dev, "Error in writing reg 0x%02x "
 				"error: %d\n", ricoh583->irq_en_add[i], ret);
 	}
 
@@ -731,13 +934,13 @@ static int __devinit ricoh583_irq_init(struct ricoh583 *ricoh583, int irq,
 				ricoh583->gpedge_add[i],
 				ricoh583->gpedge_reg[i]);
 		if (ret < 0)
-			dev_err(ricoh583->dev, "Error in writin reg 0x%02x "
+			dev_err(ricoh583->dev, "Error in writing reg 0x%02x "
 				"error: %d\n", ricoh583->gpedge_add[i], ret);
 	}
 
 	ret = __ricoh583_write(ricoh583->client, RICOH583_INTC_INTEN, 0x0);
 	if (ret < 0)
-		dev_err(ricoh583->dev, "Error in writin reg 0x%02x "
+		dev_err(ricoh583->dev, "Error in writing reg 0x%02x "
 				"error: %d\n", RICOH583_INTC_INTEN, ret);
 
 	/* Clear all interrupts in case they woke up active. */
@@ -745,24 +948,24 @@ static int __devinit ricoh583_irq_init(struct ricoh583 *ricoh583, int irq,
 		ret = __ricoh583_write(ricoh583->client,
 					ricoh583->irq_clr_add[i], 0);
 		if (ret < 0)
-			dev_err(ricoh583->dev, "Error in writin reg 0x%02x "
+			dev_err(ricoh583->dev, "Error in writing reg 0x%02x "
 				"error: %d\n", ricoh583->irq_clr_add[i], ret);
 	}
 
 	ricoh583->irq_base = irq_base;
 	ricoh583->irq_chip.name = "ricoh583";
-	ricoh583->irq_chip.mask = ricoh583_irq_mask;
-	ricoh583->irq_chip.unmask = ricoh583_irq_unmask;
-	ricoh583->irq_chip.bus_lock = ricoh583_irq_lock;
-	ricoh583->irq_chip.bus_sync_unlock = ricoh583_irq_sync_unlock;
-	ricoh583->irq_chip.set_type = ricoh583_irq_set_type;
+	ricoh583->irq_chip.irq_mask = ricoh583_irq_mask;
+	ricoh583->irq_chip.irq_unmask = ricoh583_irq_unmask;
+	ricoh583->irq_chip.irq_bus_lock = ricoh583_irq_lock;
+	ricoh583->irq_chip.irq_bus_sync_unlock = ricoh583_irq_sync_unlock;
+	ricoh583->irq_chip.irq_set_type = ricoh583_irq_set_type;
 
 	for (i = 0; i < RICOH583_NR_IRQS; i++) {
 		int __irq = i + ricoh583->irq_base;
-		set_irq_chip_data(__irq, ricoh583);
-		set_irq_chip_and_handler(__irq, &ricoh583->irq_chip,
+		irq_set_chip_data(__irq, ricoh583);
+		irq_set_chip_and_handler(__irq, &ricoh583->irq_chip,
 					 handle_simple_irq);
-		set_irq_nested_thread(__irq, 1);
+		irq_set_nested_thread(__irq, 1);
 #ifdef CONFIG_ARM
 		set_irq_flags(__irq, IRQF_VALID);
 #endif
@@ -901,6 +1104,10 @@ static int ricoh583_i2c_probe(struct i2c_client *i2c,
 	i2c_set_clientdata(i2c, ricoh583);
 
 	mutex_init(&ricoh583->io_lock);
+
+	ret = ricoh583_ext_power_init(ricoh583, pdata);
+	if (ret < 0)
+		goto err_irq_init;
 
 	if (i2c->irq) {
 		ret = ricoh583_irq_init(ricoh583, i2c->irq, pdata->irq_base);

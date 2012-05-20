@@ -187,6 +187,20 @@ static int pwm_backlight_resume(struct platform_device *pdev)
 #define pwm_backlight_resume	NULL
 #endif
 
+#if defined(CONFIG_ARCH_ACER_T20)||defined(CONFIG_ARCH_ACER_T30)
+static int pwm_backlight_shutdown(struct platform_device *pdev)
+{
+	struct platform_pwm_backlight_data *data = pdev->dev.platform_data;
+	struct backlight_device *bl = platform_get_drvdata(pdev);
+	struct pwm_bl_data *pb = dev_get_drvdata(&bl->dev);
+	if (data->exit)
+		data->exit(&pdev->dev);
+	pwm_disable(pb->pwm);
+
+	return 0;
+}
+#endif
+
 static struct platform_driver pwm_backlight_driver = {
 	.driver		= {
 		.name	= "pwm-backlight",
@@ -196,6 +210,9 @@ static struct platform_driver pwm_backlight_driver = {
 	.remove		= pwm_backlight_remove,
 	.suspend	= pwm_backlight_suspend,
 	.resume		= pwm_backlight_resume,
+#if defined(CONFIG_ARCH_ACER_T20)||defined(CONFIG_ARCH_ACER_T30)
+	.shutdown	= pwm_backlight_shutdown,
+#endif
 };
 
 static int __init pwm_backlight_init(void)

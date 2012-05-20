@@ -91,7 +91,7 @@ MODULE_ALIAS_SCSI_DEVICE(TYPE_MOD);
 MODULE_ALIAS_SCSI_DEVICE(TYPE_RBC);
 
 #if !defined(CONFIG_DEBUG_BLOCK_EXT_DEVT)
-#define SD_MINORS	16
+#define SD_MINORS	32
 #else
 #define SD_MINORS	0
 #endif
@@ -2454,7 +2454,7 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 	dev = &sdp->sdev_gendev;
 
 	gd->major = sd_major((index & 0xf0) >> 4);
-	gd->first_minor = ((index & 0xf) << 4) | (index & 0xfff00);
+	gd->first_minor = ((index & 0xf) << 5) | (index & 0xfff00);
 	gd->minors = SD_MINORS;
 
 	gd->fops = &sd_fops;

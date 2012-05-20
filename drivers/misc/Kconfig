@@ -548,6 +548,20 @@ config MAX1749_VIBRATOR
 	---help---
 	Adds a timed output vibrator device node for MAX1749 vibrator motor
 
+config STK2203_LIGHT_SENSOR
+	bool "STK2203 light sensor driver"
+	depends on I2C
+	default n
+	---help---
+	Adds STK2203 light sensor driver
+
+config AL3000A_LIGHT_SENSOR
+	bool "AL3000A light sensor driver"
+	depends on I2C
+	default n
+	---help---
+	Adds al3000a light sensor driver
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
@@ -555,5 +569,6 @@ source "drivers/misc/iwmc3200top/Kconfig"
 source "drivers/misc/ti-st/Kconfig"
 source "drivers/misc/lis3lv02d/Kconfig"
 source "drivers/misc/mpu3050/Kconfig"
+source "drivers/misc/tegra-baseband/Kconfig"
 
 endif # MISC_DEVICES

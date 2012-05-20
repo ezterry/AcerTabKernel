@@ -23,6 +23,7 @@
 #ifndef __LINUX_MFD_RICOH583_H
 #define __LINUX_MFD_RICOH583_H
 
+#include <linux/rtc.h>
 /* RICOH583 IRQ definitions */
 enum {
 	RICOH583_IRQ_ONKEY,
@@ -85,6 +86,36 @@ enum {
 	RICOH583_NR_GPIO,
 };
 
+enum ricoh583_deepsleep_control_id {
+	RICOH583_DS_NONE,
+	RICOH583_DS_DC0,
+	RICOH583_DS_DC1,
+	RICOH583_DS_DC2,
+	RICOH583_DS_DC3,
+	RICOH583_DS_LDO0,
+	RICOH583_DS_LDO1,
+	RICOH583_DS_LDO2,
+	RICOH583_DS_LDO3,
+	RICOH583_DS_LDO4,
+	RICOH583_DS_LDO5,
+	RICOH583_DS_LDO6,
+	RICOH583_DS_LDO7,
+	RICOH583_DS_LDO8,
+	RICOH583_DS_LDO9,
+	RICOH583_DS_PSO0,
+	RICOH583_DS_PSO1,
+	RICOH583_DS_PSO2,
+	RICOH583_DS_PSO3,
+	RICOH583_DS_PSO4,
+	RICOH583_DS_PSO5,
+	RICOH583_DS_PSO6,
+	RICOH583_DS_PSO7,
+};
+enum ricoh583_ext_pwrreq_control {
+	RICOH583_EXT_PWRREQ1_CONTROL = 0x1,
+	RICOH583_EXT_PWRREQ2_CONTROL = 0x2,
+};
+
 struct ricoh583_subdev_info {
 	int		id;
 	const char	*name;
@@ -93,6 +124,7 @@ struct ricoh583_subdev_info {
 
 struct ricoh583_rtc_platform_data {
 	int irq;
+	struct rtc_time time;
 };
 
 struct ricoh583_gpio_init_data {
@@ -110,18 +142,23 @@ struct ricoh583_platform_data {
 
 	struct ricoh583_gpio_init_data *gpio_init_data;
 	int num_gpioinit_data;
+	bool enable_shutdown_pin;
 };
 
 extern int ricoh583_read(struct device *dev, uint8_t reg, uint8_t *val);
-extern int ricoh583_bulk_read(struct device *dev, u8 reg, u8 count,
+extern int ricoh583_bulk_reads(struct device *dev, u8 reg, u8 count,
 				uint8_t *val);
 extern int ricoh583_write(struct device *dev, u8 reg, uint8_t val);
-extern int ricoh583_bulk_write(struct device *dev, u8 reg, u8 count,
+extern int ricoh583_bulk_writes(struct device *dev, u8 reg, u8 count,
 				uint8_t *val);
 extern int ricoh583_set_bits(struct device *dev, u8 reg, uint8_t bit_mask);
 extern int ricoh583_clr_bits(struct device *dev, u8 reg, uint8_t bit_mask);
 extern int ricoh583_update(struct device *dev, u8 reg, uint8_t val,
 					uint8_t mask);
+extern int ricoh583_ext_power_req_config(struct device *dev,
+		enum ricoh583_deepsleep_control_id control_id,
+		enum ricoh583_ext_pwrreq_control ext_pwr_req,
+		int deepsleep_slot_nr);
 extern int ricoh583_power_off(void);
 
 #endif

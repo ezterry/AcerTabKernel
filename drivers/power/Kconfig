@@ -118,12 +118,14 @@ config BATTERY_WM97XX
 config BATTERY_BQ20Z75
         tristate "TI BQ20z75 gas gauge"
         depends on I2C
+	default n
         help
          Say Y to include support for TI BQ20z75 SBS-compliant
          gas gauge and protection IC.
 
 config BATTERY_BQ27x00
 	tristate "BQ27x00 battery driver"
+	default n
 	help
 	  Say Y here to enable support for batteries with BQ27x00 (I2C/HDQ) chips.
 
@@ -131,16 +133,23 @@ config BATTERY_BQ27X00_I2C
 	bool "BQ27200/BQ27500 support"
 	depends on BATTERY_BQ27x00
 	depends on I2C
-	default y
+	default n
 	help
 	  Say Y here to enable support for batteries with BQ27x00 (I2C) chips.
 
 config BATTERY_BQ27X00_PLATFORM
 	bool "BQ27000 support"
 	depends on BATTERY_BQ27x00
-	default y
+	default n
 	help
 	  Say Y here to enable support for batteries with BQ27000 (HDQ) chips.
+
+config BATTERY_BQ27541
+	tristate "BQ27541 battery driver"
+	depends on I2C
+	default n
+	help
+	  Say Y here to enable support for batteries with BQ27541 (I2C) chips.
 
 config CHARGER_TPS8003X
 	tristate "TPS8003x battery charger driver"
@@ -241,4 +250,23 @@ config CHARGER_GPIO
 	  This driver can be build as a module. If so, the module will be
 	  called gpio-charger.
 
+config BATTERY_ECBAT
+	tristate "EC control and battery gauge"
+	depends on I2C
+	help
+	  Say Y to include support for EC control and battery behind EC.
+
+config LSC_FROM_EC
+	tristate "Load Lens Correction data from EC by Camera MI5140 2nd source(nonOTPM)"
+	depends on I2C && BATTERY_ECBAT
+	help
+	  Say Y to include support for Load Lens Correction data from EC.
+
 endif # POWER_SUPPLY
+
+config TEGRA_BPC_MGMT
+	tristate "battery peak current management"
+	depends on ARCH_TEGRA
+	help
+	  This driver reduces cpu frequency/voltage on gpio event from the
+	  battery current monitor device.

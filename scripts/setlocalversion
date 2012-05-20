@@ -170,7 +170,9 @@ else
 	# LOCALVERSION= is not specified
 	if test "${LOCALVERSION+set}" != "set"; then
 		scm=$(scm_version --short)
-		res="$res${scm:++}"
+		# Fore the res to be "+" to fix the mismatch problem of prebuilt
+		# kernel module
+		res="$res+"
 	fi
 fi
 

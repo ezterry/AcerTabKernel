@@ -85,6 +85,8 @@ struct sdhci_host {
 #define SDHCI_QUIRK_NO_HISPD_BIT			(1<<29)
 /* Controller treats ADMA descriptors with length 0000h incorrectly */
 #define SDHCI_QUIRK_BROKEN_ADMA_ZEROLEN_DESC		(1<<30)
+/* Controller cannot report the line status in present state register */
+#define SDHCI_QUIRK_NON_STD_VOLTAGE_SWITCHING		(1<<31)
 
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
@@ -138,6 +140,7 @@ struct sdhci_host {
 	struct tasklet_struct finish_tasklet;
 
 	struct timer_list timer;	/* Timer for timeouts */
+	unsigned int card_int_set;	/* card int status */
 
 	unsigned int caps;	/* Alternative capabilities */
 
@@ -145,6 +148,14 @@ struct sdhci_host {
 	unsigned int            ocr_avail_sd;
 	unsigned int            ocr_avail_mmc;
 
+#if defined(CONFIG_ARCH_ACER_T20)
+	int card_present;
+#elif defined(CONFIG_ARCH_ACER_T30)
+	int card_present;
+	struct tasklet_struct sd_power_tasklet;
+	struct delayed_work sd_power_work;
+	unsigned int regulator_count;
+#endif
 	unsigned long private[0] ____cacheline_aligned;
 };
 #endif /* __SDHCI_H */

@@ -1,3 +1,5 @@
+GCOV_PROFILE := y
+
 obj-$(CONFIG_ARCH_TEGRA_2x_SOC)         += ahb.o
 obj-y                                   += apbio.o
 obj-y                                   += common.o
@@ -5,7 +7,7 @@ obj-$(CONFIG_ARCH_TEGRA_2x_SOC)         += common-t2.o
 obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += common-t3.o
 obj-y                                   += io.o
 obj-y                                   += irq.o
-obj-y                                   += syncpt.o
+obj-$(CONFIG_TEGRA_GRHOST)              += syncpt.o
 obj-y                                   += clock.o
 obj-y                                   += timer.o
 ifeq ($(CONFIG_ARCH_TEGRA_2x_SOC),y)
@@ -21,6 +23,7 @@ obj-y                                   += devices.o
 obj-y                                   += delay.o
 obj-y                                   += powergate.o
 obj-y                                   += pm.o
+obj-$(CONFIG_TEGRA_WDT_RECOVERY)        += wdt-recovery.o
 obj-$(CONFIG_PM_SLEEP)                  += pm-irq.o
 obj-y                                   += gic.o
 obj-y                                   += sleep.o
@@ -28,8 +31,11 @@ obj-$(CONFIG_ARCH_TEGRA_2x_SOC)         += sleep-t2.o
 obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += sleep-t3.o
 obj-y                                   += fuse.o
 obj-y                                   += kfuse.o
+obj-y                                   += csi.o
 obj-$(CONFIG_TEGRA_SILICON_PLATFORM)    += tegra_odm_fuses.o
+ifneq ($(CONFIG_ARCH_ACER_T20),y)
 obj-y                                   += i2c_error_recovery.o
+endif
 obj-$(CONFIG_TEGRA_LEGACY_AUDIO)        += tegra_i2s_audio.o
 obj-$(CONFIG_TEGRA_LEGACY_AUDIO)        += tegra_spdif_audio.o
 obj-y                                   += mc.o
@@ -81,8 +87,10 @@ obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += cpuidle-t3.o
 endif
 endif
 ifeq ($(CONFIG_TEGRA_THERMAL_THROTTLE),y)
-obj-y                                   += tegra2-throttle.o
+obj-$(CONFIG_ARCH_TEGRA_2x_SOC)         += tegra2_throttle.o
+obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += tegra3_throttle.o
 endif
+obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += tegra3_thermal.o
 obj-$(CONFIG_TEGRA_IOVMM)               += iovmm.o
 obj-$(CONFIG_TEGRA_IOVMM_GART)          += iovmm-gart.o
 obj-$(CONFIG_TEGRA_IOVMM_SMMU)          += iovmm-smmu.o
@@ -90,13 +98,11 @@ obj-$(CONFIG_DEBUG_ICEDCC)              += sysfs-dcc.o
 obj-$(CONFIG_TEGRA_CLUSTER_CONTROL)     += sysfs-cluster.o
 ifeq ($(CONFIG_TEGRA_MC_PROFILE),y)
 obj-$(CONFIG_ARCH_TEGRA_2x_SOC)         += tegra2_mc.o
-obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += tegra3_mc.o
 endif
 obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += tegra3_tsensor.o
 obj-$(CONFIG_TEGRA_DYNAMIC_PWRDET)      += powerdetect.o
-
-obj-${CONFIG_TEGRA_SPI_SLAVE}           += spi_tegra_slave.o
-
+obj-$(CONFIG_TEGRA_USB_MODEM_POWER)     += tegra_usb_modem_power.o
+obj-$(CONFIG_TEGRA_PCI)                 += pcie.o
 obj-${CONFIG_MACH_HARMONY}              += board-harmony.o
 obj-${CONFIG_MACH_HARMONY}              += board-harmony-kbc.o
 obj-${CONFIG_MACH_HARMONY}              += board-harmony-panel.o
@@ -112,6 +118,8 @@ obj-${CONFIG_MACH_SEABOARD}             += board-seaboard-pinmux.o
 
 obj-${CONFIG_MACH_TRIMSLICE}            += board-trimslice.o
 obj-${CONFIG_MACH_TRIMSLICE}            += board-trimslice-pinmux.o
+
+obj-${CONFIG_MACH_P852}                 += p852/
 
 obj-${CONFIG_MACH_VENTANA}              += board-ventana.o
 obj-${CONFIG_MACH_VENTANA}              += board-ventana-pinmux.o
@@ -143,12 +151,12 @@ obj-${CONFIG_MACH_CARDHU}               += board-cardhu-kbc.o
 obj-${CONFIG_MACH_CARDHU}               += board-cardhu-panel.o
 obj-${CONFIG_MACH_CARDHU}               += board-cardhu-pinmux.o
 obj-${CONFIG_MACH_CARDHU}               += board-cardhu-power.o
+obj-${CONFIG_MACH_CARDHU}               += board-cardhu-pm298-power-rails.o
+obj-${CONFIG_MACH_CARDHU}               += board-cardhu-pm299-power-rails.o
 obj-${CONFIG_MACH_CARDHU}               += board-cardhu-sdhci.o
 obj-${CONFIG_MACH_CARDHU}               += board-cardhu-sensors.o
 obj-${CONFIG_MACH_CARDHU}               += board-cardhu-memory.o
 obj-${CONFIG_MACH_CARDHU}               += board-cardhu-powermon.o
-obj-${CONFIG_MACH_CARDHU}               += baseband-xmm-power.o
-obj-m += baseband-xmm-power2.o
 
 obj-${CONFIG_MACH_TEGRA_ENTERPRISE}     += board-enterprise.o
 obj-${CONFIG_MACH_TEGRA_ENTERPRISE}     += board-enterprise-panel.o
@@ -159,3 +167,28 @@ obj-${CONFIG_MACH_TEGRA_ENTERPRISE}     += board-enterprise-power.o
 obj-${CONFIG_MACH_TEGRA_ENTERPRISE}     += board-enterprise-baseband.o
 obj-${CONFIG_MACH_TEGRA_ENTERPRISE}     += board-enterprise-kbc.o
 obj-${CONFIG_MACH_TEGRA_ENTERPRISE}     += board-enterprise-sensors.o
+
+obj-${CONFIG_TEGRA_BB_XMM_POWER}        += baseband-xmm-power.o
+obj-${CONFIG_TEGRA_BB_XMM_POWER2}       += baseband-xmm-power2.o
+
+obj-${CONFIG_ARCH_ACER_T20}             += board-acer-t20.o
+obj-${CONFIG_ARCH_ACER_T20}             += board-acer-t20-pinmux.o
+obj-${CONFIG_ARCH_ACER_T20}             += board-acer-t20-sdhci.o
+obj-${CONFIG_ARCH_ACER_T20}             += board-acer-t20-power.o
+obj-${CONFIG_ARCH_ACER_T20}             += board-acer-t20-panel.o
+obj-${CONFIG_ARCH_ACER_T20}             += board-acer-t20-sensors.o
+ifeq ($(CONFIG_MACH_PICASSO_E),y)
+obj-y                                   += board-picasso-e-memory.o
+else
+obj-${CONFIG_MACH_PICASSO}              += board-picasso-memory.o
+endif
+obj-${CONFIG_MACH_VANGOGH}              += board-vangogh-memory.o
+
+obj-${CONFIG_ARCH_ACER_T30}             += board-acer-t30.o
+obj-${CONFIG_ARCH_ACER_T30}             += board-acer-t30-kbc.o
+obj-${CONFIG_ARCH_ACER_T30}             += board-acer-t30-panel.o
+obj-${CONFIG_ARCH_ACER_T30}             += board-acer-t30-pinmux.o
+obj-${CONFIG_ARCH_ACER_T30}             += board-acer-t30-power.o
+obj-${CONFIG_ARCH_ACER_T30}             += board-acer-t30-sdhci.o
+obj-${CONFIG_ARCH_ACER_T30}             += board-acer-t30-sensors.o
+obj-${CONFIG_ARCH_ACER_T30}             += board-acer-t30-memory.o

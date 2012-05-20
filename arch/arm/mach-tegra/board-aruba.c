@@ -34,7 +34,6 @@
 #include <linux/gpio_keys.h>
 #include <linux/input.h>
 #include <linux/platform_data/tegra_usb.h>
-#include <linux/usb/android_composite.h>
 #include <mach/clk.h>
 #include <mach/iomap.h>
 #include <mach/irqs.h>
@@ -104,7 +103,7 @@ static struct tegra_utmip_config utmi_phy_config[] = {
 
 /* !!!FIXME!!! THESE ARE VENTANA SETTINGS */
 static struct tegra_ulpi_config ulpi_phy_config = {
-	.clk = "clk_dev2",
+	.clk = "cdev2",
 };
 
 #ifdef CONFIG_BCM4329_RFKILL
@@ -164,43 +163,6 @@ static __initdata struct tegra_clk_init_table aruba_clk_init_table[] = {
 	{ "d_audio",	"pll_a_out0",	11289600,	false},
 	{ "audio_2x",	"audio",	22579200,	true},
 	{ NULL,		NULL,		0,		0},
-};
-
-static char *usb_functions[] = { "mtp" };
-static char *usb_functions_adb[] = { "mtp", "adb" };
-
-static struct android_usb_product usb_products[] = {
-	{
-		.product_id     = 0x7102,
-		.num_functions  = ARRAY_SIZE(usb_functions),
-		.functions      = usb_functions,
-	},
-	{
-		.product_id     = 0x7100,
-		.num_functions  = ARRAY_SIZE(usb_functions_adb),
-		.functions      = usb_functions_adb,
-	},
-};
-
-/* standard android USB platform data */
-static struct android_usb_platform_data andusb_plat = {
-	.vendor_id              = 0x0955,
-	.product_id             = 0x7100,
-	.manufacturer_name      = "NVIDIA",
-	.product_name           = "Aruba",
-	.serial_number          = NULL,
-	.num_products = ARRAY_SIZE(usb_products),
-	.products = usb_products,
-	.num_functions = ARRAY_SIZE(usb_functions_adb),
-	.functions = usb_functions_adb,
-};
-
-static struct platform_device androidusb_device = {
-	.name   = "android_usb",
-	.id     = -1,
-	.dev    = {
-		.platform_data  = &andusb_plat,
-	},
 };
 
 struct tegra_das_platform_data tegra_das_pdata = {
@@ -472,7 +434,6 @@ static struct platform_device *aruba_devices[] __initdata = {
 #if ENABLE_OTG
 	&tegra_otg_device,
 #endif
-	&androidusb_device,
 	&debug_uart,
 	&tegra_uartb_device,
 	&tegra_uartc_device,
@@ -534,51 +495,6 @@ static void aruba_usb_init(void)
 	platform_device_register(&tegra_ehci2_device);
 }
 
-struct platform_device *tegra_usb_otg_host_register(void)
-{
-	struct platform_device *pdev;
-	void *platform_data;
-	int val;
-
-	pdev = platform_device_alloc(tegra_ehci1_device.name, tegra_ehci1_device.id);
-	if (!pdev)
-		return NULL;
-
-	val = platform_device_add_resources(pdev, tegra_ehci1_device.resource,
-		tegra_ehci1_device.num_resources);
-	if (val)
-		goto error;
-
-	pdev->dev.dma_mask =  tegra_ehci1_device.dev.dma_mask;
-	pdev->dev.coherent_dma_mask = tegra_ehci1_device.dev.coherent_dma_mask;
-
-	platform_data = kmalloc(sizeof(struct tegra_ehci_platform_data), GFP_KERNEL);
-	if (!platform_data)
-		goto error;
-
-	memcpy(platform_data, &tegra_ehci_pdata[0],
-				sizeof(struct tegra_ehci_platform_data));
-	pdev->dev.platform_data = platform_data;
-
-	val = platform_device_add(pdev);
-	if (val)
-		goto error_add;
-
-	return pdev;
-
-error_add:
-	kfree(platform_data);
-error:
-	pr_err("%s: failed to add the host contoller device\n", __func__);
-	platform_device_put(pdev);
-	return NULL;
-}
-
-void tegra_usb_otg_host_unregister(struct platform_device *pdev)
-{
-	platform_device_unregister(pdev);
-}
-
 #ifdef CONFIG_SATA_AHCI_TEGRA
 static void aruba_sata_init(void)
 {
@@ -590,13 +506,9 @@ static void aruba_sata_init(void) { }
 
 static void __init tegra_aruba_init(void)
 {
-	char serial[20];
-
 	tegra_clk_init_from_table(aruba_clk_init_table);
 	aruba_pinmux_init();
 
-	snprintf(serial, sizeof(serial), "%016llx", tegra_chip_uid());
-	andusb_plat.serial_number = kstrdup(serial, GFP_KERNEL);
 	platform_add_devices(aruba_devices, ARRAY_SIZE(aruba_devices));
 
 	aruba_sdhci_init();

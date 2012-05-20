@@ -138,8 +138,8 @@ static void save_push_v0(struct nvhost_cdma *cdma,
 			struct nvhost_hwctx *ctx)
 {
 	nvhost_cdma_push_gather(cdma,
-			cdma_to_channel(cdma)->dev->nvmap,
-			nvmap_ref_to_handle(nvhost_3dctx_save_buf),
+			(void *)NVHOST_CDMA_PUSH_GATHER_CTXSAVE,
+			(void *)NVHOST_CDMA_PUSH_GATHER_CTXSAVE,
 			nvhost_opcode_gather(save_size),
 			save_phys);
 }
@@ -260,7 +260,17 @@ static void __init setup_save_regs(struct save_info *info,
 			break;
 		}
 		if (ptr) {
-			memset(ptr, 0, count * 4);
+			/* SAVE cases only: reserve room for incoming data */
+			u32 k = 0;
+			/*
+			 * Create a signature pattern for indirect data (which
+			 * will be overwritten by true incoming data) for
+			 * better deducing where we are in a long command
+			 * sequence, when given only a FIFO snapshot for debug
+			 * purposes.
+			*/
+			for (k = 0; k < count; k++)
+				*(ptr + k) = 0xd000d000 | (offset << 16) | k;
 			ptr += count;
 		}
 		save_count += count;
@@ -331,9 +341,6 @@ static void ctx3d_save_service(struct nvhost_hwctx *ctx)
 	wmb();
 	nvhost_syncpt_cpu_incr(&ctx->channel->dev->syncpt, NVSYNCPT_3D);
 }
-
-
-/*** savers ***/
 
 int __init t20_nvhost_3dctx_handler_init(struct nvhost_hwctx_handler *h)
 {

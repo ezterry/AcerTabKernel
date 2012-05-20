@@ -39,8 +39,14 @@
 #include "clock.h"
 #include "dvfs.h"
 
+#define DVFS_RAIL_STATS_BIN	25
+#define DVFS_RAIL_STATS_SCALE	2
+#define DVFS_RAIL_STATS_RANGE   ((DVFS_RAIL_STATS_TOP_BIN - 1) * \
+				 DVFS_RAIL_STATS_BIN / DVFS_RAIL_STATS_SCALE)
+
 static LIST_HEAD(dvfs_rail_list);
 static DEFINE_MUTEX(dvfs_lock);
+static DEFINE_MUTEX(rail_disable_lock);
 
 static int dvfs_rail_update(struct dvfs_rail *rail);
 
@@ -88,6 +94,74 @@ static int dvfs_solve_relationship(struct dvfs_relationship *rel)
 	return rel->solve(rel->from, rel->to);
 }
 
+/* rail statistic - called during rail init, or under dfs_lock, or with
+   CPU0 only on-line, and interrupts disabled */
+static void dvfs_rail_stats_init(struct dvfs_rail *rail, int millivolts)
+{
+	rail->stats.last_update = ktime_get();
+	if (millivolts >= rail->min_millivolts) {
+		int i = 1 + (2 * (millivolts - rail->min_millivolts) *
+			DVFS_RAIL_STATS_SCALE + DVFS_RAIL_STATS_BIN) /
+			(2 * DVFS_RAIL_STATS_BIN);
+		rail->stats.last_index = min(i, DVFS_RAIL_STATS_TOP_BIN);
+	}
+
+	if (rail->max_millivolts >
+	    rail->min_millivolts + DVFS_RAIL_STATS_RANGE)
+		pr_warn("tegra_dvfs: %s: stats above %d mV will be squashed\n",
+			rail->reg_id,
+			rail->min_millivolts + DVFS_RAIL_STATS_RANGE);
+}
+
+static void dvfs_rail_stats_update(
+	struct dvfs_rail *rail, int millivolts, ktime_t now)
+{
+	rail->stats.time_at_mv[rail->stats.last_index] = ktime_add(
+		rail->stats.time_at_mv[rail->stats.last_index], ktime_sub(
+			now, rail->stats.last_update));
+	rail->stats.last_update = now;
+
+	if (rail->stats.off)
+		return;
+
+	if (millivolts >= rail->min_millivolts) {
+		int i = 1 + (2 * (millivolts - rail->min_millivolts) *
+			DVFS_RAIL_STATS_SCALE + DVFS_RAIL_STATS_BIN) /
+			(2 * DVFS_RAIL_STATS_BIN);
+		rail->stats.last_index = min(i, DVFS_RAIL_STATS_TOP_BIN);
+	} else if (millivolts == 0)
+			rail->stats.last_index = 0;
+}
+
+static void dvfs_rail_stats_pause(struct dvfs_rail *rail,
+				  ktime_t delta, bool on)
+{
+	int i = on ? rail->stats.last_index : 0;
+	rail->stats.time_at_mv[i] = ktime_add(rail->stats.time_at_mv[i], delta);
+}
+
+void tegra_dvfs_rail_off(struct dvfs_rail *rail, ktime_t now)
+{
+	if (rail) {
+		dvfs_rail_stats_update(rail, 0, now);
+		rail->stats.off = true;
+	}
+}
+
+void tegra_dvfs_rail_on(struct dvfs_rail *rail, ktime_t now)
+{
+	if (rail) {
+		rail->stats.off = false;
+		dvfs_rail_stats_update(rail, rail->millivolts, now);
+	}
+}
+
+void tegra_dvfs_rail_pause(struct dvfs_rail *rail, ktime_t delta, bool on)
+{
+	if (rail)
+		dvfs_rail_stats_pause(rail, delta, on);
+}
+
 /* Sets the voltage on a dvfs rail to a specific value, and updates any
  * rails that depend on this rail. */
 static int dvfs_rail_set_voltage(struct dvfs_rail *rail, int millivolts)
@@ -97,6 +171,7 @@ static int dvfs_rail_set_voltage(struct dvfs_rail *rail, int millivolts)
 	int step = (millivolts > rail->millivolts) ? rail->step : -rail->step;
 	int i;
 	int steps;
+	bool jmp_to_zero;
 
 	if (!rail->reg) {
 		if (millivolts == rail->millivolts)
@@ -109,10 +184,14 @@ static int dvfs_rail_set_voltage(struct dvfs_rail *rail, int millivolts)
 		return 0;
 
 	rail->resolving_to = true;
-	steps = DIV_ROUND_UP(abs(millivolts - rail->millivolts), rail->step);
+	jmp_to_zero = rail->jmp_to_zero &&
+			((millivolts == 0) || (rail->millivolts == 0));
+	steps = jmp_to_zero ? 1 :
+		DIV_ROUND_UP(abs(millivolts - rail->millivolts), rail->step);
 
 	for (i = 0; i < steps; i++) {
-		if (abs(millivolts - rail->millivolts) > rail->step)
+		if (!jmp_to_zero &&
+		    (abs(millivolts - rail->millivolts) > rail->step))
 			rail->new_millivolts = rail->millivolts + step;
 		else
 			rail->new_millivolts = millivolts;
@@ -142,6 +221,7 @@ static int dvfs_rail_set_voltage(struct dvfs_rail *rail, int millivolts)
 		}
 
 		rail->millivolts = rail->new_millivolts;
+		dvfs_rail_stats_update(rail, rail->millivolts, ktime_get());
 
 		/* After changing the voltage, tell each rail that depends
 		 * on this rail that the voltage has changed.
@@ -236,6 +316,7 @@ static int dvfs_rail_connect_to_regulator(struct dvfs_rail *rail)
 	}
 	rail->millivolts = v / 1000;
 	rail->new_millivolts = rail->millivolts;
+	dvfs_rail_stats_init(rail, rail->millivolts);
 	return 0;
 }
 
@@ -260,13 +341,13 @@ __tegra_dvfs_set_rate(struct dvfs *d, unsigned long rate)
 		while (i < d->num_freqs && rate > d->freqs[i])
 			i++;
 
-		d->cur_millivolts = d->millivolts[i];
 		if ((d->max_millivolts) &&
-		    (d->cur_millivolts > d->max_millivolts)) {
+		    (d->millivolts[i] > d->max_millivolts)) {
 			pr_warn("tegra_dvfs: voltage %d too high for dvfs on"
-				" %s\n", d->cur_millivolts, d->clk_name);
+				" %s\n", d->millivolts[i], d->clk_name);
 			return -EINVAL;
 		}
+		d->cur_millivolts = d->millivolts[i];
 	}
 
 	d->cur_rate = rate;
@@ -476,58 +557,88 @@ static void __tegra_dvfs_rail_disable(struct dvfs_rail *rail)
 {
 	int ret;
 
-	if (!rail->disabled) {
-		ret = dvfs_rail_set_voltage(rail, rail->nominal_millivolts);
-		if (ret)
-			pr_info("dvfs: failed to set regulator %s to disable "
-				"voltage %d\n", rail->reg_id,
-				rail->nominal_millivolts);
-		rail->disabled = true;
-	}
+	ret = dvfs_rail_set_voltage(rail, rail->nominal_millivolts);
+	if (ret)
+		pr_info("dvfs: failed to set regulator %s to disable "
+			"voltage %d\n", rail->reg_id,
+			rail->nominal_millivolts);
+	rail->disabled = true;
 }
 
 /* must be called with dvfs lock held */
 static void __tegra_dvfs_rail_enable(struct dvfs_rail *rail)
 {
-	if (rail->disabled) {
-		rail->disabled = false;
-		dvfs_rail_update(rail);
-	}
+	rail->disabled = false;
+	dvfs_rail_update(rail);
 }
 
 void tegra_dvfs_rail_enable(struct dvfs_rail *rail)
 {
-	mutex_lock(&dvfs_lock);
-	__tegra_dvfs_rail_enable(rail);
-	mutex_unlock(&dvfs_lock);
+	mutex_lock(&rail_disable_lock);
+
+	if (rail->disabled) {
+		mutex_lock(&dvfs_lock);
+		__tegra_dvfs_rail_enable(rail);
+		mutex_unlock(&dvfs_lock);
+
+		tegra_dvfs_rail_post_enable(rail);
+	}
+	mutex_unlock(&rail_disable_lock);
+
 }
 
 void tegra_dvfs_rail_disable(struct dvfs_rail *rail)
 {
+	mutex_lock(&rail_disable_lock);
+	if (rail->disabled)
+		goto out;
+
+	/* rail disable will set it to nominal voltage underneath clock
+	   framework - need to re-configure clock rates that are not safe
+	   at nominal (yes, unsafe at nominal is ugly, but possible). Rate
+	   change must be done outside of dvfs lock. */
+	if (tegra_dvfs_rail_disable_prepare(rail)) {
+		pr_info("dvfs: failed to prepare regulator %s to disable\n",
+			rail->reg_id);
+		goto out;
+	}
+
 	mutex_lock(&dvfs_lock);
 	__tegra_dvfs_rail_disable(rail);
 	mutex_unlock(&dvfs_lock);
+out:
+	mutex_unlock(&rail_disable_lock);
 }
 
 int tegra_dvfs_rail_disable_by_name(const char *reg_id)
 {
+	struct dvfs_rail *rail = tegra_dvfs_get_rail_by_name(reg_id);
+	if (!rail)
+		return -EINVAL;
+
+	tegra_dvfs_rail_disable(rail);
+	return 0;
+}
+
+struct dvfs_rail *tegra_dvfs_get_rail_by_name(const char *reg_id)
+{
 	struct dvfs_rail *rail;
-	int ret = 0;
 
 	mutex_lock(&dvfs_lock);
 	list_for_each_entry(rail, &dvfs_rail_list, node) {
 		if (!strcmp(reg_id, rail->reg_id)) {
-			__tegra_dvfs_rail_disable(rail);
-			goto out;
+			mutex_unlock(&dvfs_lock);
+			return rail;
 		}
 	}
-
-	ret = -EINVAL;
-
-out:
 	mutex_unlock(&dvfs_lock);
-	return ret;
+	return NULL;
 }
+#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
+EXPORT_SYMBOL_GPL(tegra_dvfs_rail_enable);
+EXPORT_SYMBOL_GPL(tegra_dvfs_rail_disable_by_name);
+EXPORT_SYMBOL_GPL(tegra_dvfs_get_rail_by_name);
+#endif
 
 bool tegra_dvfs_rail_updating(struct clk *clk)
 {
@@ -633,12 +744,64 @@ static const struct file_operations dvfs_tree_fops = {
 	.release	= single_release,
 };
 
+static int rail_stats_show(struct seq_file *s, void *data)
+{
+	int i;
+	struct dvfs_rail *rail;
+
+	seq_printf(s, "%-12s %-10s (bin: %d.%dmV)\n", "millivolts", "time",
+		   DVFS_RAIL_STATS_BIN / DVFS_RAIL_STATS_SCALE,
+		   ((DVFS_RAIL_STATS_BIN * 100) / DVFS_RAIL_STATS_SCALE) % 100);
+
+	mutex_lock(&dvfs_lock);
+
+	list_for_each_entry(rail, &dvfs_rail_list, node) {
+		seq_printf(s, "%s\n", rail->reg_id);
+		dvfs_rail_stats_update(rail, -1, ktime_get());
+
+		seq_printf(s, "%-12d %-10llu\n", 0,
+			cputime64_to_clock_t(msecs_to_jiffies(
+				ktime_to_ms(rail->stats.time_at_mv[0]))));
+
+		for (i = 1; i <= DVFS_RAIL_STATS_TOP_BIN; i++) {
+			ktime_t ktime_zero = ktime_set(0, 0);
+			if (ktime_equal(rail->stats.time_at_mv[i], ktime_zero))
+				continue;
+			seq_printf(s, "%-12d %-10llu\n",
+				   rail->min_millivolts + (i - 1) *
+				   DVFS_RAIL_STATS_BIN / DVFS_RAIL_STATS_SCALE,
+				cputime64_to_clock_t(msecs_to_jiffies(
+					ktime_to_ms(rail->stats.time_at_mv[i])))
+			);
+		}
+	}
+	mutex_unlock(&dvfs_lock);
+	return 0;
+}
+
+static int rail_stats_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rail_stats_show, inode->i_private);
+}
+
+static const struct file_operations rail_stats_fops = {
+	.open		= rail_stats_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 int __init dvfs_debugfs_init(struct dentry *clk_debugfs_root)
 {
 	struct dentry *d;
 
 	d = debugfs_create_file("dvfs", S_IRUGO, clk_debugfs_root, NULL,
 		&dvfs_tree_fops);
+	if (!d)
+		return -ENOMEM;
+
+	d = debugfs_create_file("rails", S_IRUGO, clk_debugfs_root, NULL,
+		&rail_stats_fops);
 	if (!d)
 		return -ENOMEM;
 

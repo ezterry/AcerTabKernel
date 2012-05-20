@@ -186,7 +186,9 @@ static struct bus_type mmc_bus_type = {
 	.remove		= mmc_bus_remove,
 	.suspend	= mmc_bus_suspend,
 	.resume		= mmc_bus_resume,
+#if !(defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30))
 	.pm		= MMC_PM_OPS_PTR,
+#endif
 };
 
 int mmc_register_bus(void)

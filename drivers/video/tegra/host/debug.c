@@ -26,6 +26,7 @@
 #include "debug.h"
 
 pid_t nvhost_debug_null_kickoff_pid;
+unsigned int nvhost_debug_trace_cmdbuf;
 
 pid_t nvhost_debug_force_timeout_pid;
 u32 nvhost_debug_force_timeout_val;
@@ -48,8 +49,15 @@ static void show_channels(struct nvhost_master *m, struct output *o)
 	int i;
 	nvhost_debug_output(o, "---- channels ----\n");
 	for (i = 0; i < m->nb_channels; i++) {
-		m->op.debug.show_channel_cdma(m, o, i);
-		m->op.debug.show_channel_fifo(m, o, i);
+		struct nvhost_channel *ch = &m->channels[i];
+		mutex_lock(&ch->reflock);
+		if (ch->refcount) {
+			mutex_lock(&ch->cdma.lock);
+			m->op.debug.show_channel_fifo(m, o, i);
+			m->op.debug.show_channel_cdma(m, o, i);
+			mutex_unlock(&ch->cdma.lock);
+		}
+		mutex_unlock(&ch->reflock);
 	}
 }
 
@@ -66,8 +74,16 @@ static void show_syncpts(struct nvhost_master *m, struct output *o)
 		nvhost_debug_output(o, "id %d (%s) min %d max %d\n",
 				    i, m->op.syncpt.name(&m->syncpt, i),
 			nvhost_syncpt_update_min(&m->syncpt, i), max);
-
 	}
+
+	for (i = 0; i < m->syncpt.nb_bases; i++) {
+		u32 base_val;
+		base_val = nvhost_syncpt_read_wait_base(&m->syncpt, i);
+		if (base_val)
+			nvhost_debug_output(o, "waitbase id %d val %d\n",
+					i, base_val);
+	}
+
 	nvhost_debug_output(o, "\n");
 }
 
@@ -115,6 +131,8 @@ void nvhost_debug_init(struct nvhost_master *master)
 
 	debugfs_create_u32("null_kickoff_pid", S_IRUGO|S_IWUSR, de,
 			&nvhost_debug_null_kickoff_pid);
+	debugfs_create_u32("trace_cmdbuf", S_IRUGO|S_IWUSR, de,
+			&nvhost_debug_trace_cmdbuf);
 
 	if (master->op.debug.debug_init)
 		master->op.debug.debug_init(de);

@@ -184,6 +184,7 @@ source security/selinux/Kconfig
 source security/smack/Kconfig
 source security/tomoyo/Kconfig
 source security/apparmor/Kconfig
+source security/tf_driver/Kconfig
 
 source security/integrity/ima/Kconfig
 
@@ -224,5 +225,11 @@ config DEFAULT_SECURITY
 	default "apparmor" if DEFAULT_SECURITY_APPARMOR
 	default "" if DEFAULT_SECURITY_DAC
 
+config ACER_SECURE_MOUNT
+	bool "Acer secure mount enabler"
+	default n
+	help
+	  This option is for security enhancement. It avoid an unauthorized
+	  operation that remounts /system partition as writable.
 endmenu
 

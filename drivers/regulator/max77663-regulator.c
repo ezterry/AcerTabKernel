@@ -21,6 +21,7 @@
 #include <linux/debugfs.h>
 #include <linux/uaccess.h>
 #include <linux/i2c.h>
+#include <linux/mfd/core.h>
 #include <linux/mfd/max77663-core.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
@@ -128,6 +129,14 @@
 #define FPS_PD_PERIOD_MASK		0x07
 #define FPS_PD_PERIOD_SHIFT		0
 
+/* Chip Identification Register */
+#define MAX77663_REG_CID5		0x5D
+
+#define CID_DIDM_MASK			0xF0
+#define CID_DIDM_SHIFT			4
+
+#define SD_SAFE_DOWN_UV			50000 /* 50mV */
+
 enum {
 	VOLT_REG = 0,
 	CFG_REG,
@@ -142,12 +151,14 @@ struct max77663_register {
 struct max77663_regulator {
 	struct regulator_dev *rdev;
 	struct device *dev;
+	struct max77663_regulator_platform_data *pdata;
 
 	u8 id;
 	u8 type;
 	u32 min_uV;
 	u32 max_uV;
 	u32 step_uV;
+	int safe_down_uV; /* for stable down scaling */
 	u32 regulator_mode;
 
 	struct max77663_register regs[3]; /* volt, cfg, fps */
@@ -181,7 +192,7 @@ static struct max77663_register fps_cfg_regs[] = {
 static inline struct max77663_regulator_platform_data
 *_to_pdata(struct max77663_regulator *reg)
 {
-	return reg->dev->platform_data;
+	return reg->pdata;
 }
 
 static inline struct device *_to_parent(struct max77663_regulator *reg)
@@ -213,7 +224,8 @@ max77663_regulator_set_fps_src(struct max77663_regulator *reg,
 {
 	int ret;
 
-	if (reg->regs[FPS_REG].addr == MAX77663_REG_FPS_NONE)
+	if ((reg->regs[FPS_REG].addr == MAX77663_REG_FPS_NONE) ||
+			(reg->fps_src == fps_src))
 		return 0;
 
 	switch (fps_src) {
@@ -297,10 +309,18 @@ max77663_regulator_set_fps_cfgs(struct max77663_regulator *reg,
 				struct max77663_regulator_fps_cfg *fps_cfgs,
 				int num_fps_cfgs)
 {
+	struct device *parent = _to_parent(reg);
 	int i, ret;
 
 	if (fps_cfg_init)
 		return 0;
+
+	for (i = 0; i <= FPS_SRC_2; i++) {
+		ret = max77663_read(parent, fps_cfg_regs[i].addr,
+				    &fps_cfg_regs[i].val, 1, 0);
+		if (ret < 0)
+			return ret;
+	}
 
 	for (i = 0; i < num_fps_cfgs; i++) {
 		ret = max77663_regulator_set_fps_cfg(reg, &fps_cfgs[i]);
@@ -353,14 +373,51 @@ static u8 max77663_regulator_get_power_mode(struct max77663_regulator *reg)
 static int max77663_regulator_do_set_voltage(struct max77663_regulator *reg,
 					     int min_uV, int max_uV)
 {
+	u8 addr = reg->regs[VOLT_REG].addr;
+	u8 mask = reg->volt_mask;
+	u8 *cache = &reg->regs[VOLT_REG].val;
 	u8 val;
+	int old_uV, new_uV, safe_uV;
+	int i, steps = 1;
+	int ret = 0;
 
 	if (min_uV < reg->min_uV || max_uV > reg->max_uV)
 		return -EDOM;
 
-	val = (min_uV - reg->min_uV) / reg->step_uV;
-	return max77663_regulator_cache_write(reg, reg->regs[VOLT_REG].addr,
-				reg->volt_mask, val, &reg->regs[VOLT_REG].val);
+	old_uV = (*cache & mask) * reg->step_uV + reg->min_uV;
+
+	if ((old_uV > min_uV) && (reg->safe_down_uV >= reg->step_uV)) {
+		steps = DIV_ROUND_UP(old_uV - min_uV, reg->safe_down_uV);
+		safe_uV = -reg->safe_down_uV;
+	}
+
+	if (steps == 1) {
+		val = (min_uV - reg->min_uV) / reg->step_uV;
+		ret = max77663_regulator_cache_write(reg, addr, mask, val,
+						     cache);
+	} else {
+		for (i = 0; i < steps; i++) {
+			if (abs(min_uV - old_uV) > abs(safe_uV))
+				new_uV = old_uV + safe_uV;
+			else
+				new_uV = min_uV;
+
+			dev_dbg(&reg->rdev->dev, "do_set_voltage: name=%s, "
+				"%d/%d, old_uV=%d, new_uV=%d\n",
+				reg->rdev->desc->name, i + 1, steps, old_uV,
+				new_uV);
+
+			val = (new_uV - reg->min_uV) / reg->step_uV;
+			ret = max77663_regulator_cache_write(reg, addr, mask,
+							     val, cache);
+			if (ret < 0)
+				return ret;
+
+			old_uV = new_uV;
+		}
+	}
+
+	return ret;
 }
 
 static int max77663_regulator_set_voltage(struct regulator_dev *rdev,
@@ -433,7 +490,7 @@ static int max77663_regulator_disable(struct regulator_dev *rdev)
 		return 0;
 	}
 
-	return max77663_regulator_set_power_mode(reg, power_mode);;
+	return max77663_regulator_set_power_mode(reg, power_mode);
 }
 
 static int max77663_regulator_is_enabled(struct regulator_dev *rdev)
@@ -505,7 +562,7 @@ static int max77663_regulator_preinit(struct max77663_regulator *reg)
 	struct max77663_regulator_platform_data *pdata = _to_pdata(reg);
 	struct device *parent = _to_parent(reg);
 	int i;
-	u8 val;
+	u8 val, mask;
 	int ret;
 
 	/* Update registers */
@@ -520,23 +577,68 @@ static int max77663_regulator_preinit(struct max77663_regulator *reg)
 		}
 	}
 
-	for (i = 0; i <= FPS_SRC_2; i++) {
-		ret = max77663_read(parent, fps_cfg_regs[i].addr,
-				    &fps_cfg_regs[i].val, 1, 0);
-		if (ret < 0) {
-			dev_err(reg->dev,
-				"preinit: Failed to get register 0x%x\n",
-				fps_cfg_regs[i].addr);
-			return ret;
-		}
-	}
-
 	/* Update FPS source */
 	if (reg->regs[FPS_REG].addr == MAX77663_REG_FPS_NONE)
 		reg->fps_src = FPS_SRC_NONE;
 	else
 		reg->fps_src = (reg->regs[FPS_REG].val & FPS_SRC_MASK)
 				>> FPS_SRC_SHIFT;
+
+	dev_dbg(reg->dev, "preinit: initial fps_src=%s\n",
+		fps_src_name(reg->fps_src));
+
+	/* Update power mode */
+	max77663_regulator_get_power_mode(reg);
+
+	/* Check Chip Identification */
+	ret = max77663_read(parent, MAX77663_REG_CID5, &val, 1, 0);
+	if (ret < 0) {
+		dev_err(reg->dev, "preinit: Failed to get register 0x%x\n",
+			MAX77663_REG_CID5);
+		return ret;
+	}
+
+	/* If metal revision is less than rev.3,
+	 * set safe_down_uV for stable down scaling. */
+	if ((reg->type == REGULATOR_TYPE_SD) &&
+			((val & CID_DIDM_MASK) >> CID_DIDM_SHIFT) <= 2)
+		reg->safe_down_uV = SD_SAFE_DOWN_UV;
+	else
+		reg->safe_down_uV = 0;
+
+	/* Set FPS */
+	ret = max77663_regulator_set_fps_cfgs(reg, pdata->fps_cfgs,
+					      pdata->num_fps_cfgs);
+	if (ret < 0) {
+		dev_err(reg->dev, "preinit: Failed to set FPSCFG\n");
+		return ret;
+	}
+
+	/* To prevent power rail turn-off when change FPS source,
+	 * it must set power mode to NORMAL before change FPS source to NONE
+	 * from SRC_0, SRC_1 and SRC_2. */
+	if ((reg->fps_src != FPS_SRC_NONE) && (pdata->fps_src == FPS_SRC_NONE)
+			&& (reg->power_mode != POWER_MODE_NORMAL)) {
+		ret = max77663_regulator_set_power_mode(reg, POWER_MODE_NORMAL);
+		if (ret < 0) {
+			dev_err(reg->dev, "preinit: Failed to "
+				"set power mode to POWER_MODE_NORMAL\n");
+			return ret;
+		}
+	}
+
+	ret = max77663_regulator_set_fps_src(reg, pdata->fps_src);
+	if (ret < 0) {
+		dev_err(reg->dev, "preinit: Failed to set FPSSRC to %d\n",
+			pdata->fps_src);
+		return ret;
+	}
+
+	ret = max77663_regulator_set_fps(reg);
+	if (ret < 0) {
+		dev_err(reg->dev, "preinit: Failed to set FPS\n");
+		return ret;
+	}
 
 	/* Set initial state */
 	if (!pdata->init_apply)
@@ -564,50 +666,41 @@ static int max77663_regulator_preinit(struct max77663_regulator *reg)
 		return ret;
 	}
 
-
 skip_init_apply:
 	if (reg->type == REGULATOR_TYPE_SD) {
-		if (pdata->flags & SD_SLEW_RATE_MASK) {
-			if (pdata->flags & SD_SLEW_RATE_SLOWEST)
-				val = SD_SR_13_75 << SD_SR_SHIFT;
-			else if (pdata->flags & SD_SLEW_RATE_SLOW)
-				val = SD_SR_27_5 << SD_SR_SHIFT;
-			else if (pdata->flags & SD_SLEW_RATE_FAST)
-				val = SD_SR_55 << SD_SR_SHIFT;
-			else
-				val = SD_SR_100 << SD_SR_SHIFT;
+		val = 0;
+		mask = 0;
 
-			ret = max77663_regulator_cache_write(reg,
-					reg->regs[CFG_REG].addr, SD_SR_MASK,
-					val, &reg->regs[CFG_REG].val);
-			if (ret < 0) {
-				dev_err(reg->dev,
-					"preinit: Failed to set slew rate\n");
-				return ret;
-			}
+		if (pdata->flags & SD_SLEW_RATE_MASK) {
+			mask |= SD_SR_MASK;
+			if (pdata->flags & SD_SLEW_RATE_SLOWEST)
+				val |= (SD_SR_13_75 << SD_SR_SHIFT);
+			else if (pdata->flags & SD_SLEW_RATE_SLOW)
+				val |= (SD_SR_27_5 << SD_SR_SHIFT);
+			else if (pdata->flags & SD_SLEW_RATE_FAST)
+				val |= (SD_SR_55 << SD_SR_SHIFT);
+			else
+				val |= (SD_SR_100 << SD_SR_SHIFT);
 		}
 
 		if (pdata->flags & SD_FORCED_PWM_MODE) {
-			ret = max77663_regulator_cache_write(reg,
-					reg->regs[CFG_REG].addr, SD_FPWM_MASK,
-					SD_FPWM_MASK, &reg->regs[CFG_REG].val);
-			if (ret < 0) {
-				dev_err(reg->dev, "preinit: "
-					"Failed to set forced pwm mode\n");
-				return ret;
-			}
+			mask |= SD_FPWM_MASK;
+			val |= SD_FPWM_MASK;
 		}
 
 		if (pdata->flags & SD_FSRADE_DISABLE) {
-			ret = max77663_regulator_cache_write(reg,
-					reg->regs[CFG_REG].addr,
-					SD_FSRADE_MASK,	SD_FSRADE_MASK,
-					&reg->regs[CFG_REG].val);
-			if (ret < 0) {
-				dev_err(reg->dev, "preinit: Failed to set "
-					"falling slew-rate discharge mode\n");
-				return ret;
-			}
+			mask |= SD_FSRADE_MASK;
+			val |= SD_FSRADE_MASK;
+		}
+
+		ret = max77663_regulator_cache_write(reg,
+				reg->regs[CFG_REG].addr, mask, val,
+				&reg->regs[CFG_REG].val);
+		if (ret < 0) {
+			dev_err(reg->dev, "preinit: "
+				"Failed to set register 0x%x\n",
+				reg->regs[CFG_REG].addr);
+			return ret;
 		}
 
 		if ((reg->id == MAX77663_REGULATOR_ID_SD0)
@@ -621,9 +714,6 @@ skip_init_apply:
 				return ret;
 			}
 
-			if (reg->fps_src == FPS_SRC_NONE)
-				return 0;
-
 			ret = max77663_regulator_set_fps_src(reg, FPS_SRC_NONE);
 			if (ret < 0) {
 				dev_err(reg->dev, "preinit: "
@@ -632,26 +722,6 @@ skip_init_apply:
 				return ret;
 			}
 		}
-	}
-
-	ret = max77663_regulator_set_fps_cfgs(reg, pdata->fps_cfgs,
-					      pdata->num_fps_cfgs);
-	if (ret < 0) {
-		dev_err(reg->dev, "preinit: Failed to set FPSCFG\n");
-		return ret;
-	}
-
-	ret = max77663_regulator_set_fps_src(reg, pdata->fps_src);
-	if (ret < 0) {
-		dev_err(reg->dev, "preinit: Failed to set FPSSRC to %d\n",
-			pdata->fps_src);
-		return ret;
-	}
-
-	ret = max77663_regulator_set_fps(reg);
-	if (ret < 0) {
-		dev_err(reg->dev, "preinit: Failed to set FPS\n");
-		return ret;
 	}
 
 	return 0;
@@ -759,7 +829,6 @@ static int max77663_regulator_probe(struct platform_device *pdev)
 {
 	struct regulator_desc *rdesc;
 	struct max77663_regulator *reg;
-	struct max77663_regulator_platform_data *pdata;
 	int ret = 0;
 
 	if ((pdev->id < 0) || (pdev->id >= MAX77663_REGULATOR_ID_NR)) {
@@ -770,7 +839,7 @@ static int max77663_regulator_probe(struct platform_device *pdev)
 	rdesc = &max77663_rdesc[pdev->id];
 	reg = &max77663_regs[pdev->id];
 	reg->dev = &pdev->dev;
-	pdata = reg->dev->platform_data;
+	reg->pdata = mfd_get_data(pdev);
 
 	dev_dbg(&pdev->dev, "probe: name=%s\n", rdesc->name);
 
@@ -781,8 +850,8 @@ static int max77663_regulator_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	reg->rdev = regulator_register(rdesc, &pdev->dev, &pdata->init_data,
-				       reg);
+	reg->rdev = regulator_register(rdesc, &pdev->dev,
+				       &reg->pdata->init_data, reg);
 	if (IS_ERR(reg->rdev)) {
 		dev_err(&pdev->dev, "probe: Failed to register regulator %s\n",
 			rdesc->name);

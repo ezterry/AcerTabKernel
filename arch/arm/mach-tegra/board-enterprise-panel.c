@@ -61,11 +61,13 @@
 
 #define enterprise_lcd_te		TEGRA_GPIO_PJ1
 
+#ifdef CONFIG_TEGRA_DC
 static struct regulator *enterprise_dsi_reg = NULL;
 
 static struct regulator *enterprise_hdmi_reg;
 static struct regulator *enterprise_hdmi_pll;
 static struct regulator *enterprise_hdmi_vddio;
+#endif
 
 static atomic_t sd_brightness = ATOMIC_INIT(255);
 
@@ -106,17 +108,14 @@ static tegra_dc_bl_output enterprise_bl_output_measured = {
 
 static p_tegra_dc_bl_output bl_output;
 
+static bool kernel_1st_panel_init = true;
+
 static int enterprise_backlight_notify(struct device *unused, int brightness)
 {
 	int cur_sd_brightness = atomic_read(&sd_brightness);
-	int orig_brightness = brightness;
 
 	/* SD brightness is a percentage, 8-bit value. */
 	brightness = (brightness * cur_sd_brightness) / 255;
-	if (cur_sd_brightness != 255) {
-		pr_info("NVSD BL - in: %d, sd: %d, out: %d\n",
-			orig_brightness, cur_sd_brightness, brightness);
-	}
 
 	/* Apply any backlight response curve */
 	if (brightness > 255)
@@ -126,6 +125,8 @@ static int enterprise_backlight_notify(struct device *unused, int brightness)
 
 	return brightness;
 }
+
+static int enterprise_disp1_check_fb(struct device *dev, struct fb_info *info);
 
 /*
  * In case which_pwm is TEGRA_PWM_PM0,
@@ -144,6 +145,8 @@ static struct platform_tegra_pwm_backlight_data enterprise_disp1_backlight_data 
 	.period			= 0xFF,
 	.clk_div		= 0x3FF,
 	.clk_select		= 0,
+	/* Only toggle backlight on fb blank notifications for disp1 */
+	.check_fb	= enterprise_disp1_check_fb,
 };
 
 static struct platform_device enterprise_disp1_backlight_device = {
@@ -154,6 +157,7 @@ static struct platform_device enterprise_disp1_backlight_device = {
 	},
 };
 
+#ifdef CONFIG_TEGRA_DC
 static int enterprise_hdmi_vddio_enable(void)
 {
 	int ret;
@@ -293,6 +297,7 @@ static struct tegra_dc_sd_settings enterprise_sd_settings = {
 	.hw_update_delay = 0,
 	.bin_width = -1,
 	.aggressiveness = 1,
+	.phase_in_adjustments = true,
 	.use_vid_luma = false,
 	/* Default video coefficients */
 	.coeff = {5, 9, 2},
@@ -432,21 +437,23 @@ static int enterprise_dsi_panel_enable(void)
 	}
 
 #if DSI_PANEL_RESET
-	ret = gpio_request(enterprise_dsi_panel_reset, "panel reset");
-	if (ret < 0)
-		return ret;
+	if (kernel_1st_panel_init != true) {
+		ret = gpio_request(enterprise_dsi_panel_reset, "panel reset");
+		if (ret < 0)
+			return ret;
 
-	ret = gpio_direction_output(enterprise_dsi_panel_reset, 0);
-	if (ret < 0) {
-		gpio_free(enterprise_dsi_panel_reset);
-		return ret;
+		ret = gpio_direction_output(enterprise_dsi_panel_reset, 0);
+		if (ret < 0) {
+			gpio_free(enterprise_dsi_panel_reset);
+			return ret;
+		}
+		tegra_gpio_enable(enterprise_dsi_panel_reset);
+
+		gpio_set_value(enterprise_dsi_panel_reset, 0);
+		udelay(2000);
+		gpio_set_value(enterprise_dsi_panel_reset, 1);
+		mdelay(20);
 	}
-	tegra_gpio_enable(enterprise_dsi_panel_reset);
-
-	gpio_set_value(enterprise_dsi_panel_reset, 0);
-	udelay(2000);
-	gpio_set_value(enterprise_dsi_panel_reset, 1);
-	mdelay(20);
 #endif
 
 	return ret;
@@ -455,11 +462,15 @@ static int enterprise_dsi_panel_enable(void)
 static int enterprise_dsi_panel_disable(void)
 {
 #if DSI_PANEL_RESET
-	tegra_gpio_disable(enterprise_dsi_panel_reset);
-	gpio_free(enterprise_dsi_panel_reset);
+	if (kernel_1st_panel_init != true) {
+		tegra_gpio_disable(enterprise_dsi_panel_reset);
+		gpio_free(enterprise_dsi_panel_reset);
+	} else
+		kernel_1st_panel_init = false;
 #endif
 	return 0;
 }
+#endif
 
 static void enterprise_stereo_set_mode(int mode)
 {
@@ -485,21 +496,13 @@ static void enterprise_stereo_set_orientation(int mode)
 	}
 }
 
+#ifdef CONFIG_TEGRA_DC
 static int enterprise_dsi_panel_postsuspend(void)
 {
-	int err = 0;
-
-	if (enterprise_dsi_reg) {
-		err = regulator_disable(enterprise_dsi_reg);
-		if (err < 0)
-			printk(KERN_ERR
-			"DSI regulator avdd_dsi_csi disable failed\n");
-		regulator_put(enterprise_dsi_reg);
-		enterprise_dsi_reg = NULL;
-	}
-
-	return err;
+	/* Do nothing for enterprise dsi panel */
+	return 0;
 }
+#endif
 
 static struct tegra_dsi_cmd dsi_init_cmd[]= {
 	DSI_CMD_SHORT(0x05, 0x11, 0x00),
@@ -540,7 +543,15 @@ static struct tegra_dsi_cmd dsi_suspend_cmd[] = {
 struct tegra_dsi_out enterprise_dsi = {
 	.n_data_lanes = 2,
 	.pixel_format = TEGRA_DSI_PIXEL_FORMAT_24BIT_P,
+#if(DC_CTRL_MODE & TEGRA_DC_OUT_ONE_SHOT_MODE)
+	/* For one-shot mode, mismatch between freq of DC and TE signal
+	 * may cause frame drop. We increase refreash rate a little bit
+	 * more than target value to avoid missing TE signal.
+	 */
+	.refresh_rate = 66,
+#else
 	.refresh_rate = 60,
+#endif
 	.virtual_channel = TEGRA_DSI_VIRTUAL_CHANNEL_0,
 
 	.panel_has_frame_buffer = true,
@@ -572,6 +583,7 @@ static struct tegra_stereo_out enterprise_stereo = {
 	.set_orientation	= &enterprise_stereo_set_orientation,
 };
 
+#ifdef CONFIG_TEGRA_DC
 static struct tegra_dc_mode enterprise_dsi_modes[] = {
 	{
 		.pclk = 10000000,
@@ -588,7 +600,6 @@ static struct tegra_dc_mode enterprise_dsi_modes[] = {
 	},
 };
 
-
 static struct tegra_fb_data enterprise_dsi_fb_data = {
 	.win		= 0,
 	.xres		= 540,
@@ -596,7 +607,6 @@ static struct tegra_fb_data enterprise_dsi_fb_data = {
 	.bits_per_pixel	= 32,
 	.flags		= TEGRA_FB_FLIP_ON_PROBE,
 };
-
 
 static struct tegra_dc_out enterprise_disp1_out = {
 	.align		= TEGRA_DC_ALIGN_MSB,
@@ -626,6 +636,7 @@ static struct tegra_dc_platform_data enterprise_disp1_pdata = {
 	.emc_clk_rate	= 204000000,
 	.fb		= &enterprise_dsi_fb_data,
 };
+
 static struct nvhost_device enterprise_disp1_device = {
 	.name		= "tegradc",
 	.id		= 0,
@@ -636,6 +647,11 @@ static struct nvhost_device enterprise_disp1_device = {
 	},
 };
 
+static int enterprise_disp1_check_fb(struct device *dev, struct fb_info *info)
+{
+	return info->device == &enterprise_disp1_device.dev;
+}
+
 static struct nvhost_device enterprise_disp2_device = {
 	.name		= "tegradc",
 	.id		= 1,
@@ -645,6 +661,7 @@ static struct nvhost_device enterprise_disp2_device = {
 		.platform_data = &enterprise_disp2_pdata,
 	},
 };
+#endif
 
 static struct nvmap_platform_carveout enterprise_carveouts[] = {
 	[0] = NVMAP_HEAP_CARVEOUT_IRAM_INIT,
@@ -672,7 +689,9 @@ static struct platform_device enterprise_nvmap_device = {
 
 static struct platform_device *enterprise_gfx_devices[] __initdata = {
 	&enterprise_nvmap_device,
+#ifdef CONFIG_TEGRA_GRHOST
 	&tegra_grhost_device,
+#endif
 	&tegra_pwfm0_device,
 };
 
@@ -688,8 +707,6 @@ struct early_suspend enterprise_panel_early_suspender;
 
 static void enterprise_panel_early_suspend(struct early_suspend *h)
 {
-	unsigned i;
-
 	/* power down LCD, add use a black screen for HDMI */
 	if (num_registered_fb > 0)
 		fb_blank(registered_fb[0], FB_BLANK_POWERDOWN);
@@ -718,7 +735,7 @@ static void enterprise_panel_late_resume(struct early_suspend *h)
 int __init enterprise_panel_init(void)
 {
 	int err;
-	struct resource *res;
+	struct resource __maybe_unused *res;
 
 	bl_output = enterprise_bl_output_measured;
 
@@ -761,15 +778,18 @@ int __init enterprise_panel_init(void)
 	err = platform_add_devices(enterprise_gfx_devices,
 				ARRAY_SIZE(enterprise_gfx_devices));
 
+#if defined(CONFIG_TEGRA_GRHOST) && defined(CONFIG_TEGRA_DC)
 	res = nvhost_get_resource_byname(&enterprise_disp1_device,
 					 IORESOURCE_MEM, "fbmem");
 	res->start = tegra_fb_start;
 	res->end = tegra_fb_start + tegra_fb_size - 1;
+#endif
 
 	/* Copy the bootloader fb to the fb. */
 	tegra_move_framebuffer(tegra_fb_start, tegra_bootloader_fb_start,
 		min(tegra_fb_size, tegra_bootloader_fb_size));
 
+#if defined(CONFIG_TEGRA_GRHOST) && defined(CONFIG_TEGRA_DC)
 	if (!err)
 		err = nvhost_device_register(&enterprise_disp1_device);
 
@@ -779,8 +799,9 @@ int __init enterprise_panel_init(void)
 	res->end = tegra_fb2_start + tegra_fb2_size - 1;
 	if (!err)
 		err = nvhost_device_register(&enterprise_disp2_device);
+#endif
 
-#if defined(CONFIG_TEGRA_NVAVP)
+#if defined(CONFIG_TEGRA_GRHOST) && defined(CONFIG_TEGRA_NVAVP)
 	if (!err)
 		err = nvhost_device_register(&nvavp_device);
 #endif

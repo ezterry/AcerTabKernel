@@ -112,6 +112,7 @@
 #define GPIO_DBNC_32MS			3
 
 #define ONOFF_SFT_RST_MASK		(1 << 7)
+#define ONOFF_SLPEN_MASK		(1 << 2)
 
 enum {
 	CACHE_IRQ_LBT,
@@ -356,11 +357,22 @@ int max77663_power_off(void)
 {
 	struct max77663_chip *chip = max77663_chip;
 
+	if (!chip)
+		return -EINVAL;
+
 	dev_info(chip->dev, "%s: Global shutdown\n", __func__);
 	return max77663_set_bits(chip->dev, MAX77663_REG_ONOFF_CFG1,
 				 ONOFF_SFT_RST_MASK, ONOFF_SFT_RST_MASK, 0);
 }
 EXPORT_SYMBOL(max77663_power_off);
+
+static int max77663_sleep_enable(struct max77663_chip *chip)
+{
+	/* Enable sleep that AP can be placed into sleep mode
+	 * by pulling EN1 low */
+	return max77663_set_bits(chip->dev, MAX77663_REG_ONOFF_CFG1,
+				 ONOFF_SLPEN_MASK, ONOFF_SLPEN_MASK, 0);
+}
 
 static inline int max77663_cache_write(struct device *dev, u8 addr, u8 mask,
 				       u8 val, u8 *cache)
@@ -1016,7 +1028,6 @@ static struct irq_chip max77663_irq_chip = {
 
 static int max77663_irq_init(struct max77663_chip *chip)
 {
-	unsigned long flags = IRQF_TRIGGER_LOW | IRQF_ONESHOT | IRQF_DISABLED;
 	u32 temp;
 	int i, ret = 0;
 
@@ -1072,7 +1083,7 @@ static int max77663_irq_init(struct max77663_chip *chip)
 	}
 
 	ret = request_threaded_irq(chip->i2c_power->irq, NULL, max77663_irq,
-				   flags, "max77663", chip);
+				   IRQF_ONESHOT, "max77663", chip);
 	if (ret) {
 		dev_err(chip->dev, "irq_init: Failed to request irq %d\n",
 			chip->i2c_power->irq);
@@ -1276,6 +1287,7 @@ static int max77663_probe(struct i2c_client *client,
 	max77663_gpio_init(chip);
 	max77663_irq_init(chip);
 	max77663_debugfs_init(chip);
+	max77663_sleep_enable(chip);
 
 	ret = mfd_add_devices(&client->dev, 0, pdata->sub_devices,
 			      pdata->num_subdevs, NULL, 0);
@@ -1316,16 +1328,30 @@ static int __devexit max77663_remove(struct i2c_client *client)
 static int max77663_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+	struct max77663_chip *chip = i2c_get_clientdata(client);
+	int ret;
 
 	if (client->irq)
 		disable_irq(client->irq);
 
-	return 0;
+	ret = max77663_sleep_enable(chip);
+	if (ret < 0)
+		dev_err(dev, "suspend: Failed to enable sleep\n");
+
+	return ret;
 }
 
 static int max77663_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+	struct max77663_chip *chip = i2c_get_clientdata(client);
+	int ret;
+
+	ret = max77663_sleep_enable(chip);
+	if (ret < 0) {
+		dev_err(dev, "resume: Failed to enable sleep\n");
+		return ret;
+	}
 
 	if (client->irq)
 		enable_irq(client->irq);

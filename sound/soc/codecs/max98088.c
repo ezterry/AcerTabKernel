@@ -1421,8 +1421,6 @@ static int max98088_dai_set_sysclk(struct snd_soc_dai *dai,
        if (freq == max98088->sysclk)
                return 0;
 
-       max98088->sysclk = freq; /* remember current sysclk */
-
        /* Setup clocks for slave mode, and using the PLL
         * PSCLK = 0x01 (when master clk is 10MHz to 20MHz)
         *         0x02 (when master clk is 20MHz to 30MHz)..
@@ -1592,7 +1590,7 @@ static int max98088_dai2_set_fmt(struct snd_soc_dai *codec_dai,
 
 static void max98088_sync_cache(struct snd_soc_codec *codec)
 {
-       u16 *reg_cache = codec->reg_cache;
+       u8 *reg_cache = codec->reg_cache;
        int i;
 
        if (!codec->cache_sync)
@@ -1630,6 +1628,9 @@ static int max98088_set_bias_level(struct snd_soc_codec *codec,
                if (codec->dapm.bias_level == SND_SOC_BIAS_OFF)
                        max98088_sync_cache(codec);
 
+               snd_soc_update_bits(codec, M98088_REG_51_PWR_SYS,
+                               M98088_SHDNRUN, M98088_SHDNRUN);
+
                snd_soc_update_bits(codec, M98088_REG_4C_PWR_EN_IN,
                                M98088_MBEN, M98088_MBEN);
                break;
@@ -1637,6 +1638,8 @@ static int max98088_set_bias_level(struct snd_soc_codec *codec,
        case SND_SOC_BIAS_OFF:
                snd_soc_update_bits(codec, M98088_REG_4C_PWR_EN_IN,
                                M98088_MBEN, 0);
+               snd_soc_update_bits(codec, M98088_REG_51_PWR_SYS,
+                               M98088_SHDNRUN, 0);
                codec->cache_sync = 1;
                break;
        }
@@ -1973,7 +1976,6 @@ int max98088_report_jack(struct snd_soc_codec *codec)
 static irqreturn_t max98088_jack_handler(int irq, void *data)
 {
        struct snd_soc_codec *codec = data;
-       struct max98088_priv *max98088 = snd_soc_codec_get_drvdata(codec);
 
        /*clear the interrupt by reading the status register */
        snd_soc_read(codec, M98088_REG_00_IRQ_STATUS);
@@ -1988,8 +1990,6 @@ int max98088_headset_detect(struct snd_soc_codec *codec,
        struct max98088_priv *max98088 = snd_soc_codec_get_drvdata(codec);
        max98088->headset_jack = jack;
 
-       max98088_report_jack(codec);
-
        if (max98088->irq) {
                if (type & SND_JACK_HEADSET) {
                        /* headphone + microphone detection */
@@ -2003,6 +2003,18 @@ int max98088_headset_detect(struct snd_soc_codec *codec,
                /* Enable the Jack Detection Circuitry */
                snd_soc_update_bits(codec, M98088_REG_4B_CFG_JACKDET,
                        M98088_JDETEN, M98088_JDETEN);
+
+               /*JDET is always set the first time JDETEN is set,
+               so clear it*/
+               snd_soc_read(codec, M98088_REG_00_IRQ_STATUS);
+
+               /*after setting JDETEN, JKSNS would be set after hw
+               debounce time so wait before reading the status*/
+               msleep(max98088->pdata->debounce_time_ms);
+
+               /*report jack status at boot-up*/
+               max98088_report_jack(codec);
+
                /*Enable the jack detection interrupt*/
                snd_soc_update_bits(codec, M98088_REG_0F_IRQ_ENABLE,
                        M98088_IJDET, M98088_IJDET);
@@ -2019,6 +2031,7 @@ static int max98088_probe(struct snd_soc_codec *codec)
        int ret = 0;
 
        codec->cache_sync = 1;
+       codec->dapm.idle_bias_off = 1;
 
        ret = snd_soc_codec_set_cache_io(codec, 8, 8, SND_SOC_I2C);
        if (ret != 0) {

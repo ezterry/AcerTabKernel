@@ -4,6 +4,9 @@
 # 14 Sep 2000, Christoph Hellwig <hch@infradead.org>
 # Rewritten to use lists instead of if-statements.
 # 
+ifeq ($(CONFIG_ACER_SECURE_MOUNT),y)
+EXTRA_CFLAGS += -DCONFIG_SECURE_MOUNT
+endif
 
 obj-y :=	open.o read_write.o file_table.o super.o \
 		char_dev.o stat.o exec.o pipe.o namei.o fcntl.o \

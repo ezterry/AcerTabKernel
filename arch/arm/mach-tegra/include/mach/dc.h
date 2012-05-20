@@ -254,12 +254,27 @@ struct tegra_dc_sd_rgb {
 	u8 b;
 };
 
+struct tegra_dc_sd_agg_priorities {
+	u8 pri_lvl;
+	u8 agg[4];
+};
+
 struct tegra_dc_sd_settings {
 	unsigned enable;
 	bool use_auto_pwm;
 	u8 hw_update_delay;
-	unsigned bin_width;
 	u8 aggressiveness;
+	short bin_width;
+	u8 phase_in_settings;
+	u8 phase_in_adjustments;
+	u8 cmd;
+	u8 final_agg;
+	u16 cur_agg_step;
+	u16 phase_settings_step;
+	u16 phase_adj_step;
+	u16 num_phase_in_steps;
+
+	struct tegra_dc_sd_agg_priorities agg_priorities;
 
 	bool use_vid_luma;
 	struct tegra_dc_sd_rgb coeff;
@@ -271,6 +286,14 @@ struct tegra_dc_sd_settings {
 
 	atomic_t *sd_brightness;
 	struct platform_device *bl_device;
+};
+
+enum {
+	NO_CMD = 0x0,
+	ENABLE = 0x1,
+	DISABLE = 0x2,
+	PHASE_IN = 0x4,
+	AGG_CHG = 0x8,
 };
 
 enum {
@@ -511,6 +534,8 @@ struct tegra_dc_pwm_params {
 };
 
 void tegra_dc_config_pwm(struct tegra_dc *dc, struct tegra_dc_pwm_params *cfg);
+
+int tegra_dsi_send_panel_short_cmd(struct tegra_dc *dc, u8 *pdata, u8 data_len);
 
 int tegra_dc_update_csc(struct tegra_dc *dc, int win_index);
 

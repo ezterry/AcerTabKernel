@@ -75,6 +75,11 @@ config ANDROID_RAM_CONSOLE_EARLY_SIZE
 	default 0
 	depends on ANDROID_RAM_CONSOLE_EARLY_INIT
 
+config ANDROID_RAM_CONSOLE_DEBUG_CONSOLE_SUSPENDED
+	bool "Resume console in case of kernel panic"
+	default n
+	depends on ANDROID_RAM_CONSOLE
+
 config ANDROID_TIMED_OUTPUT
 	bool "Timed output class driver"
 	default y

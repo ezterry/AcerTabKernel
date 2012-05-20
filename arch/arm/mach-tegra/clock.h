@@ -25,9 +25,9 @@
 #ifdef CONFIG_ARCH_TEGRA_2x_SOC
 #define USE_PLL_LOCK_BITS 0	/* Never use lock bits on Tegra2 */
 #else
-/* !!!FIXME!!! PLL lock bits should work on Tegra3 */
-#define USE_PLL_LOCK_BITS 0	/* Use lock bits for PLL stabiliation */
+#define USE_PLL_LOCK_BITS 1	/* Use lock bits for PLL stabiliation */
 #define USE_PLLE_SS 1		/* Use spread spectrum coefficients for PLLE */
+#define PLL_POST_LOCK_DELAY 50	/* Safety delay after lock is detected */
 #endif
 
 #define DIV_BUS			(1 << 0)
@@ -52,8 +52,10 @@
 #define MUX_CLK_OUT		(1 << 19)
 #define PLLM			(1 << 20)
 #define DIV_U71_INT		(1 << 21)
+#define DIV_U71_IDLE		(1 << 22)
 #define ENABLE_ON_INIT		(1 << 28)
 #define PERIPH_ON_APB		(1 << 29)
+#define PERIPH_ON_CBUS		(1 << 30)
 
 #ifndef __ASSEMBLY__
 
@@ -108,6 +110,7 @@ enum shared_bus_users_mode {
 	SHARED_FLOOR = 0,
 	SHARED_BW,
 	SHARED_CEILING,
+	SHARED_AUTO,
 };
 
 enum clk_state {
@@ -228,6 +231,7 @@ unsigned long clk_get_max_rate(struct clk *c);
 unsigned long clk_get_min_rate(struct clk *c);
 unsigned long clk_get_rate_locked(struct clk *c);
 int clk_set_rate_locked(struct clk *c, unsigned long rate);
+int clk_set_parent_locked(struct clk *c, struct clk *parent);
 int tegra_clk_shared_bus_update(struct clk *c);
 void tegra2_sdmmc_tap_delay(struct clk *c, int delay);
 int tegra_emc_set_rate(unsigned long rate);

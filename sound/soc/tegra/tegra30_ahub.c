@@ -39,6 +39,9 @@ static struct tegra30_ahub *ahub;
 
 static inline void tegra30_apbif_write(u32 reg, u32 val)
 {
+#ifdef CONFIG_PM
+	ahub->apbif_reg_cache[reg >> 2] = val;
+#endif
 	__raw_writel(val, ahub->apbif_regs + reg);
 }
 
@@ -49,6 +52,9 @@ static inline u32 tegra30_apbif_read(u32 reg)
 
 static inline void tegra30_audio_write(u32 reg, u32 val)
 {
+#ifdef CONFIG_PM
+	ahub->ahub_reg_cache[reg >> 2] = val;
+#endif
 	__raw_writel(val, ahub->audio_regs + reg);
 }
 
@@ -56,6 +62,36 @@ static inline u32 tegra30_audio_read(u32 reg)
 {
 	return __raw_readl(ahub->audio_regs + reg);
 }
+
+#ifdef CONFIG_PM
+int tegra30_ahub_apbif_resume()
+{
+	int i = 0;
+	int cache_idx_rsvd;
+
+	tegra30_ahub_enable_clocks();
+
+	/*restore ahub regs*/
+	for (i = 0; i < TEGRA30_AHUB_AUDIO_RX_COUNT; i++)
+		tegra30_audio_write(i<<2, ahub->ahub_reg_cache[i]);
+
+	/*restore apbif regs*/
+	cache_idx_rsvd = TEGRA30_APBIF_CACHE_REG_INDEX_RSVD;
+	for (i = 0; i < TEGRA30_APBIF_CACHE_REG_COUNT; i++) {
+		if (i == cache_idx_rsvd) {
+			cache_idx_rsvd +=
+				TEGRA30_APBIF_CACHE_REG_INDEX_RSVD_STRIDE;
+			continue;
+		}
+
+		tegra30_apbif_write(i<<2, ahub->apbif_reg_cache[i]);
+	}
+
+	tegra30_ahub_disable_clocks();
+
+	return 0;
+}
+#endif
 
 /*
  * clk_apbif isn't required for a theoretical I2S<->I2S configuration where
@@ -215,7 +251,7 @@ int tegra30_ahub_allocate_rx_fifo(enum tegra30_ahub_rxcif *rxcif,
 	      (channel * TEGRA30_AHUB_CHANNEL_CTRL_STRIDE);
 	val = tegra30_apbif_read(reg);
 	val &= ~(TEGRA30_AHUB_CHANNEL_CTRL_RX_THRESHOLD_MASK |
-	       TEGRA30_AHUB_CHANNEL_CTRL_TX_PACK_MASK);
+	       TEGRA30_AHUB_CHANNEL_CTRL_RX_PACK_MASK);
 	val |= (7 << TEGRA30_AHUB_CHANNEL_CTRL_RX_THRESHOLD_SHIFT) |
 	       TEGRA30_AHUB_CHANNEL_CTRL_RX_PACK_EN |
 	       TEGRA30_AHUB_CHANNEL_CTRL_RX_PACK_16;
@@ -397,10 +433,60 @@ int tegra30_ahub_unset_rx_cif_source(enum tegra30_ahub_rxcif rxcif)
 	return 0;
 }
 
+int tegra30_ahub_set_rx_cif_channels(enum tegra30_ahub_rxcif rxcif,
+				     unsigned int audio_ch,
+				     unsigned int client_ch)
+{
+	int channel = rxcif - TEGRA30_AHUB_RXCIF_APBIF_RX0;
+	unsigned int reg, val;
+
+	tegra30_ahub_enable_clocks();
+
+	reg = TEGRA30_AHUB_CIF_RX_CTRL +
+	      (channel * TEGRA30_AHUB_CIF_RX_CTRL_STRIDE);
+	val = tegra30_apbif_read(reg);
+	val &= ~(TEGRA30_AUDIOCIF_CTRL_AUDIO_CHANNELS_MASK |
+		TEGRA30_AUDIOCIF_CTRL_CLIENT_CHANNELS_MASK);
+	val |= ((audio_ch - 1) << TEGRA30_AUDIOCIF_CTRL_AUDIO_CHANNELS_SHIFT) |
+	      ((client_ch - 1) << TEGRA30_AUDIOCIF_CTRL_CLIENT_CHANNELS_SHIFT);
+	tegra30_apbif_write(reg, val);
+
+	tegra30_ahub_disable_clocks();
+
+	return 0;
+}
+
+int tegra30_ahub_set_tx_cif_channels(enum tegra30_ahub_txcif txcif,
+				     unsigned int audio_ch,
+				     unsigned int client_ch)
+{
+	int channel = txcif - TEGRA30_AHUB_TXCIF_APBIF_TX0;
+	unsigned int reg, val;
+
+	tegra30_ahub_enable_clocks();
+
+	reg = TEGRA30_AHUB_CIF_TX_CTRL +
+	      (channel * TEGRA30_AHUB_CIF_TX_CTRL_STRIDE);
+	val = tegra30_apbif_read(reg);
+	val &= ~(TEGRA30_AUDIOCIF_CTRL_AUDIO_CHANNELS_MASK |
+		TEGRA30_AUDIOCIF_CTRL_CLIENT_CHANNELS_MASK);
+	val |= ((audio_ch - 1) << TEGRA30_AUDIOCIF_CTRL_AUDIO_CHANNELS_SHIFT) |
+	      ((client_ch - 1) << TEGRA30_AUDIOCIF_CTRL_CLIENT_CHANNELS_SHIFT);
+
+	tegra30_apbif_write(reg, val);
+
+	tegra30_ahub_disable_clocks();
+
+	return 0;
+}
+
 static int __devinit tegra30_ahub_probe(struct platform_device *pdev)
 {
 	struct resource *res0, *res1, *region;
 	int ret = 0;
+#ifdef CONFIG_PM
+	int i = 0, cache_idx_rsvd;
+#endif
 
 	if (ahub)
 		return -ENODEV;
@@ -472,6 +558,27 @@ static int __devinit tegra30_ahub_probe(struct platform_device *pdev)
 		ret = -ENOMEM;
 		goto err_release1;
 	}
+
+#ifdef CONFIG_PM
+	/* cache the POR values of ahub/apbif regs*/
+	tegra30_ahub_enable_clocks();
+
+	for (i = 0; i < TEGRA30_AHUB_AUDIO_RX_COUNT; i++)
+		ahub->ahub_reg_cache[i] = tegra30_audio_read(i<<2);
+
+	cache_idx_rsvd = TEGRA30_APBIF_CACHE_REG_INDEX_RSVD;
+	for (i = 0; i < TEGRA30_APBIF_CACHE_REG_COUNT; i++) {
+		if (i == cache_idx_rsvd) {
+			cache_idx_rsvd +=
+				TEGRA30_APBIF_CACHE_REG_INDEX_RSVD_STRIDE;
+			continue;
+		}
+
+		ahub->apbif_reg_cache[i] = tegra30_apbif_read(i<<2);
+	}
+
+	tegra30_ahub_disable_clocks();
+#endif
 
 	tegra30_ahub_debug_add(ahub);
 

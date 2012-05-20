@@ -32,6 +32,7 @@
 #include "../dev.h"
 #include "3dctx_t20.h"
 #include "../3dctx_common.h"
+#include "mpectx_t20.h"
 
 #define NVHOST_NUMCHANNELS (NV_HOST1X_CHANNELS - 1)
 #define NVHOST_CHANNEL_BASE 0
@@ -57,8 +58,8 @@ const struct nvhost_channeldesc nvhost_t20_channelmap[] = {
 			 BIT(NVSYNCPT_VBLANK0) | BIT(NVSYNCPT_VBLANK1),
 	.modulemutexes = BIT(NVMODMUTEX_DISPLAYA) | BIT(NVMODMUTEX_DISPLAYB),
 	.module        = {
-			NVHOST_MODULE_NO_POWERGATING,
-			NVHOST_DEFAULT_POWERDOWN_DELAY,
+			NVHOST_MODULE_NO_POWERGATE_IDS,
+			NVHOST_DEFAULT_CLOCKGATE_DELAY,
 			},
 },
 {
@@ -72,7 +73,7 @@ const struct nvhost_channeldesc nvhost_t20_channelmap[] = {
 			.prepare_poweroff = nvhost_3dctx_prepare_power_off,
 			.clocks = {{"gr3d", UINT_MAX}, {"emc", UINT_MAX}, {} },
 			.powergate_ids = {TEGRA_POWERGATE_3D, -1},
-			NVHOST_DEFAULT_POWERDOWN_DELAY,
+			NVHOST_DEFAULT_CLOCKGATE_DELAY,
 			},
 },
 {
@@ -86,8 +87,8 @@ const struct nvhost_channeldesc nvhost_t20_channelmap[] = {
 			.clocks = {{"gr2d", UINT_MAX} ,
 					{"epp", UINT_MAX} ,
 					{"emc", UINT_MAX} },
-			NVHOST_MODULE_NO_POWERGATING,
-			.powerdown_delay = 0,
+			NVHOST_MODULE_NO_POWERGATE_IDS,
+			.clockgate_delay = 0,
 			}
 },
 {
@@ -95,8 +96,8 @@ const struct nvhost_channeldesc nvhost_t20_channelmap[] = {
 	.name	 = "isp",
 	.syncpts = 0,
 	.module         = {
-			NVHOST_MODULE_NO_POWERGATING,
-			NVHOST_DEFAULT_POWERDOWN_DELAY,
+			NVHOST_MODULE_NO_POWERGATE_IDS,
+			NVHOST_DEFAULT_CLOCKGATE_DELAY,
 			},
 },
 {
@@ -109,8 +110,8 @@ const struct nvhost_channeldesc nvhost_t20_channelmap[] = {
 	.modulemutexes = BIT(NVMODMUTEX_VI),
 	.exclusive     = true,
 	.module        = {
-			NVHOST_MODULE_NO_POWERGATING,
-			NVHOST_DEFAULT_POWERDOWN_DELAY,
+			NVHOST_MODULE_NO_POWERGATE_IDS,
+			NVHOST_DEFAULT_CLOCKGATE_DELAY,
 			}
 },
 {
@@ -120,12 +121,13 @@ const struct nvhost_channeldesc nvhost_t20_channelmap[] = {
 			 BIT(NVSYNCPT_MPE_WR_SAFE),
 	.waitbases     = BIT(NVWAITBASE_MPE),
 	.class	       = NV_VIDEO_ENCODE_MPEG_CLASS_ID,
-	.exclusive     = true,
+	.waitbasesync  = true,
 	.keepalive     = true,
 	.module        = {
+			.prepare_poweroff = nvhost_mpectx_prepare_power_off,
 			.clocks = {{"mpe", UINT_MAX}, {"emc", UINT_MAX}, {} },
 			.powergate_ids = {TEGRA_POWERGATE_MPE, -1},
-			NVHOST_DEFAULT_POWERDOWN_DELAY,
+			NVHOST_DEFAULT_CLOCKGATE_DELAY,
 			},
 },
 {
@@ -134,8 +136,8 @@ const struct nvhost_channeldesc nvhost_t20_channelmap[] = {
 	.syncpts       = BIT(NVSYNCPT_DSI),
 	.modulemutexes = BIT(NVMODMUTEX_DSI),
 	.module        = {
-			NVHOST_MODULE_NO_POWERGATING,
-			NVHOST_DEFAULT_POWERDOWN_DELAY,
+			NVHOST_MODULE_NO_POWERGATE_IDS,
+			NVHOST_DEFAULT_CLOCKGATE_DELAY,
 			},
 }};
 
@@ -153,7 +155,8 @@ static inline int t20_nvhost_hwctx_handler_init(
 {
 	if (strcmp(module, "gr3d") == 0)
 		return t20_nvhost_3dctx_handler_init(h);
-
+	else if (strcmp(module, "mpe") == 0)
+		return t20_nvhost_mpectx_handler_init(h);
 	return 0;
 }
 
@@ -171,30 +174,35 @@ static int t20_channel_init(struct nvhost_channel *ch,
 	return t20_nvhost_hwctx_handler_init(&ch->ctxhandler, ch->desc->name);
 }
 
-static int t20_channel_submit(struct nvhost_channel *channel,
-			      struct nvhost_hwctx *hwctx,
-			      struct nvmap_client *user_nvmap,
-			      u32 *gather,
-			      u32 *gather_end,
-			      struct nvhost_waitchk *waitchk,
-			      struct nvhost_waitchk *waitchk_end,
-			      u32 waitchk_mask,
-			      struct nvmap_handle **unpins,
-			      int nr_unpins,
-			      u32 syncpt_id,
-			      u32 syncpt_incrs,
-			      struct nvhost_userctx_timeout *timeout,
-			      u32 *syncpt_value,
-			      bool null_kickoff)
+static void t20_channel_sync_waitbases(struct nvhost_channel *ch, u32 syncpt_val)
+{
+	unsigned long waitbase;
+	unsigned long int waitbase_mask = ch->desc->waitbases;
+	if (ch->desc->waitbasesync) {
+		waitbase = find_first_bit(&waitbase_mask, BITS_PER_LONG);
+		nvhost_cdma_push(&ch->cdma,
+			nvhost_opcode_setclass(NV_HOST1X_CLASS_ID,
+				NV_CLASS_HOST_LOAD_SYNCPT_BASE,
+				1),
+				nvhost_class_host_load_syncpt_base(waitbase,
+						syncpt_val));
+	}
+}
+
+static int t20_channel_submit(struct nvhost_job *job)
 {
 	struct nvhost_hwctx *hwctx_to_save = NULL;
-	struct nvhost_syncpt *sp = &channel->dev->syncpt;
-	u32 user_syncpt_incrs = syncpt_incrs;
+	struct nvhost_channel *channel = job->ch;
+	struct nvhost_syncpt *sp = &job->ch->dev->syncpt;
+	u32 user_syncpt_incrs = job->syncpt_incrs;
 	bool need_restore = false;
 	u32 syncval;
 	int err;
 	void *ctxrestore_waiter = NULL;
 	void *ctxsave_waiter, *completed_waiter;
+
+	if (job->hwctx && job->hwctx->has_timedout)
+		return -ETIMEDOUT;
 
 	ctxsave_waiter = nvhost_intr_alloc_waiter();
 	completed_waiter = nvhost_intr_alloc_waiter();
@@ -209,7 +217,7 @@ static int t20_channel_submit(struct nvhost_channel *channel,
 		channel->mod.desc->busy(&channel->mod);
 
 	/* before error checks, return current max */
-	*syncpt_value = nvhost_syncpt_read_max(sp, syncpt_id);
+	job->syncpt_end = nvhost_syncpt_read_max(sp, job->syncpt_id);
 
 	/* get submit lock */
 	err = mutex_lock_interruptible(&channel->submitlock);
@@ -219,7 +227,7 @@ static int t20_channel_submit(struct nvhost_channel *channel,
 	}
 
 	/* If we are going to need a restore, allocate a waiter for it */
-	if (channel->cur_ctx != hwctx && hwctx && hwctx->valid) {
+	if (channel->cur_ctx != job->hwctx && job->hwctx && job->hwctx->valid) {
 		ctxrestore_waiter = nvhost_intr_alloc_waiter();
 		if (!ctxrestore_waiter) {
 			mutex_unlock(&channel->submitlock);
@@ -231,11 +239,12 @@ static int t20_channel_submit(struct nvhost_channel *channel,
 	}
 
 	/* remove stale waits */
-	if (waitchk != waitchk_end) {
+	if (job->num_waitchk) {
 		err = nvhost_syncpt_wait_check(sp,
-					       user_nvmap,
-					       waitchk_mask,
-					       waitchk, waitchk_end);
+					       job->nvmap,
+					       job->waitchk_mask,
+					       job->waitchk,
+					       job->num_waitchk);
 		if (err) {
 			dev_warn(&channel->dev->pdev->dev,
 				 "nvhost_syncpt_wait_check failed: %d\n", err);
@@ -246,42 +255,46 @@ static int t20_channel_submit(struct nvhost_channel *channel,
 	}
 
 	/* begin a CDMA submit */
-	err = nvhost_cdma_begin(&channel->cdma, timeout);
+	err = nvhost_cdma_begin(&channel->cdma, job);
 	if (err) {
 		mutex_unlock(&channel->submitlock);
 		nvhost_module_idle(&channel->mod);
 		goto done;
 	}
 
+	t20_channel_sync_waitbases(channel, job->syncpt_end);
+
 	/* context switch */
-	if (channel->cur_ctx != hwctx) {
+	if (channel->cur_ctx != job->hwctx) {
 		trace_nvhost_channel_context_switch(channel->desc->name,
-		  channel->cur_ctx, hwctx);
+		  channel->cur_ctx, job->hwctx);
 		hwctx_to_save = channel->cur_ctx;
-		if (hwctx_to_save && hwctx_to_save->timeout &&
-			hwctx_to_save->timeout->has_timedout) {
+		if (hwctx_to_save &&
+			hwctx_to_save->has_timedout) {
 			hwctx_to_save = NULL;
 			dev_dbg(&channel->dev->pdev->dev,
 				"%s: skip save of timed out context (0x%p)\n",
-				__func__, channel->cur_ctx->timeout);
+				__func__, channel->cur_ctx);
 		}
 		if (hwctx_to_save) {
-			syncpt_incrs += hwctx_to_save->save_incrs;
+			job->syncpt_incrs += hwctx_to_save->save_incrs;
 			hwctx_to_save->valid = true;
 			channel->ctxhandler.get(hwctx_to_save);
 		}
-		channel->cur_ctx = hwctx;
+		channel->cur_ctx = job->hwctx;
 		if (need_restore)
-			syncpt_incrs += channel->cur_ctx->restore_incrs;
+			job->syncpt_incrs += channel->cur_ctx->restore_incrs;
 	}
 
 	/* get absolute sync value */
-	if (BIT(syncpt_id) & sp->client_managed)
+	if (BIT(job->syncpt_id) & sp->client_managed)
 		syncval = nvhost_syncpt_set_max(sp,
-						syncpt_id, syncpt_incrs);
+				job->syncpt_id, job->syncpt_incrs);
 	else
 		syncval = nvhost_syncpt_incr_max(sp,
-						syncpt_id, syncpt_incrs);
+				job->syncpt_id, job->syncpt_incrs);
+
+	job->syncpt_end = syncval;
 
 	/* push save buffer (pre-gather setup depends on unit) */
 	if (hwctx_to_save)
@@ -303,14 +316,14 @@ static int t20_channel_submit(struct nvhost_channel *channel,
 			nvhost_opcode_setclass(channel->desc->class, 0, 0),
 			NVHOST_OPCODE_NOOP);
 
-	if (null_kickoff) {
+	if (job->null_kickoff) {
 		int incr;
 		u32 op_incr;
 
 		/* TODO ideally we'd also perform host waits here */
 
 		/* push increments that correspond to nulled out commands */
-		op_incr = nvhost_opcode_imm(0, 0x100 | syncpt_id);
+		op_incr = nvhost_opcode_imm(0, 0x100 | job->syncpt_id);
 		for (incr = 0; incr < (user_syncpt_incrs >> 1); incr++)
 			nvhost_cdma_push(&channel->cdma, op_incr, op_incr);
 		if (user_syncpt_incrs & 1)
@@ -330,30 +343,30 @@ static int t20_channel_submit(struct nvhost_channel *channel,
 	} else {
 		/* push user gathers */
 		int i = 0;
-		for ( ; i < gather_end-gather; i += 2) {
+		for ( ; i < job->num_gathers; i++) {
+			u32 op1 = nvhost_opcode_gather(job->gathers[i].words);
+			u32 op2 = job->gathers[i].mem;
 			nvhost_cdma_push_gather(&channel->cdma,
-					user_nvmap,
-					unpins[i/2],
-					nvhost_opcode_gather(gather[i]),
-					gather[i+1]);
+					job->nvmap, job->unpins[i/2],
+					op1, op2);
 		}
 	}
 
 	/* end CDMA submit & stash pinned hMems into sync queue */
-	nvhost_cdma_end(&channel->cdma, user_nvmap,
-			syncpt_id, syncval, unpins, nr_unpins,
-			timeout);
+	nvhost_cdma_end(&channel->cdma, job);
 
 	trace_nvhost_channel_submitted(channel->desc->name,
-			syncval-syncpt_incrs, syncval);
+			syncval - job->syncpt_incrs, syncval);
 
 	/*
 	 * schedule a context save interrupt (to drain the host FIFO
 	 * if necessary, and to release the restore buffer)
 	 */
 	if (hwctx_to_save) {
-		err = nvhost_intr_add_action(&channel->dev->intr, syncpt_id,
-			syncval - syncpt_incrs + hwctx_to_save->save_thresh,
+		err = nvhost_intr_add_action(&channel->dev->intr,
+			job->syncpt_id,
+			syncval - job->syncpt_incrs
+				+ hwctx_to_save->save_thresh,
 			NVHOST_INTR_ACTION_CTXSAVE, hwctx_to_save,
 			ctxsave_waiter,
 			NULL);
@@ -363,7 +376,8 @@ static int t20_channel_submit(struct nvhost_channel *channel,
 
 	if (need_restore) {
 		BUG_ON(!ctxrestore_waiter);
-		err = nvhost_intr_add_action(&channel->dev->intr, syncpt_id,
+		err = nvhost_intr_add_action(&channel->dev->intr,
+			job->syncpt_id,
 			syncval - user_syncpt_incrs,
 			NVHOST_INTR_ACTION_CTXRESTORE, channel->cur_ctx,
 			ctxrestore_waiter,
@@ -373,7 +387,8 @@ static int t20_channel_submit(struct nvhost_channel *channel,
 	}
 
 	/* schedule a submit complete interrupt */
-	err = nvhost_intr_add_action(&channel->dev->intr, syncpt_id, syncval,
+	err = nvhost_intr_add_action(&channel->dev->intr, job->syncpt_id,
+			syncval,
 			NVHOST_INTR_ACTION_SUBMIT_COMPLETE, channel,
 			completed_waiter,
 			NULL);
@@ -381,8 +396,6 @@ static int t20_channel_submit(struct nvhost_channel *channel,
 	WARN(err, "Failed to set submit complete interrupt");
 
 	mutex_unlock(&channel->submitlock);
-
-	*syncpt_value = syncval;
 
 done:
 	kfree(ctxrestore_waiter);
@@ -394,7 +407,6 @@ done:
 static int t20_channel_read_3d_reg(
 	struct nvhost_channel *channel,
 	struct nvhost_hwctx *hwctx,
-	struct nvhost_userctx_timeout *timeout,
 	u32 offset,
 	u32 *value)
 {
@@ -405,13 +417,25 @@ static int t20_channel_read_3d_reg(
 	DECLARE_WAIT_QUEUE_HEAD_ONSTACK(wq);
 	void *ref;
 	void *ctx_waiter, *read_waiter, *completed_waiter;
+	struct nvhost_job *job;
 	u32 syncval;
 	int err;
+
+	if (hwctx && hwctx->has_timedout)
+		return -ETIMEDOUT;
 
 	ctx_waiter = nvhost_intr_alloc_waiter();
 	read_waiter = nvhost_intr_alloc_waiter();
 	completed_waiter = nvhost_intr_alloc_waiter();
 	if (!ctx_waiter || !read_waiter || !completed_waiter) {
+		err = -ENOMEM;
+		goto done;
+	}
+
+	job = nvhost_job_alloc(channel, hwctx,
+			NULL,
+			channel->dev->nvmap, 0, 0);
+	if (!job) {
 		err = -ENOMEM;
 		goto done;
 	}
@@ -444,8 +468,12 @@ static int t20_channel_read_3d_reg(
 	syncval = nvhost_syncpt_incr_max(&channel->dev->syncpt,
 		NVSYNCPT_3D, syncpt_incrs);
 
+	job->syncpt_id = NVSYNCPT_3D;
+	job->syncpt_incrs = syncpt_incrs;
+	job->syncpt_end = syncval;
+
 	/* begin a CDMA submit */
-	nvhost_cdma_begin(&channel->cdma, timeout);
+	nvhost_cdma_begin(&channel->cdma, job);
 
 	/* push save buffer (pre-gather setup depends on unit) */
 	if (hwctx_to_save)
@@ -493,9 +521,9 @@ static int t20_channel_read_3d_reg(
 		nvhost_opcode_imm(NV_CLASS_HOST_INCR_SYNCPT, NVSYNCPT_3D));
 
 	/* end CDMA submit  */
-	nvhost_cdma_end(&channel->cdma, channel->dev->nvmap,
-			NVSYNCPT_3D, syncval, NULL, 0,
-			timeout);
+	nvhost_cdma_end(&channel->cdma, job);
+	nvhost_job_put(job);
+	job = NULL;
 
 	/*
 	 * schedule a context save interrupt (to drain the host FIFO
@@ -546,6 +574,7 @@ done:
 	kfree(completed_waiter);
 	return err;
 }
+
 
 int nvhost_init_t20_channel_support(struct nvhost_master *host)
 {

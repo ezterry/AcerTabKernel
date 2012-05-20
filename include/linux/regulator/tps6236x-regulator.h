@@ -35,6 +35,10 @@
  * @init_uV: initial micro volts which need to be set.
  * @init_enable: Enable or do not enable the rails during initialization.
  * @init_apply: Init parameter applied or not.
+ * @is_force_pwm: Enable force pwm or not. If not then PFM mode configuration
+ *                will be used.
+ * @enable_discharge: Enable discharge the output capacitor via a typ. 300Ohm
+ *		      path
  */
 
 struct tps6236x_regulator_platform_data {
@@ -43,6 +47,8 @@ struct tps6236x_regulator_platform_data {
 	int vsel;
 	int init_uV;
 	unsigned init_apply:1;
+	bool is_force_pwm;
+	bool enable_discharge;
 };
 
 #endif /* __REGULATOR_TPS6236X_H */

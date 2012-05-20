@@ -35,9 +35,11 @@ struct tegra_i2c_platform_data {
 	int retries;
 	int timeout;	/* in jiffies */
 	u16 slave_addr;
+#if !defined(CONFIG_ARCH_ACER_T20)
 	int scl_gpio[TEGRA_I2C_MAX_BUS];
 	int sda_gpio[TEGRA_I2C_MAX_BUS];
 	int (*arb_recovery)(int scl_gpio, int sda_gpio);
+#endif
 };
 
 struct tegra_i2c_slave_platform_data {

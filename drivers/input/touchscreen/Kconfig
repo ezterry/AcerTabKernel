@@ -98,6 +98,20 @@ config TOUCHSCREEN_ATMEL_MXT
 	  To compile this driver as a module, choose M here: the
 	  module will be called atmel_mxt_ts.
 
+config TOUCHSCREEN_ATMEL_MXT1386
+	tristate "Atmel Touchscreen Interface"
+	depends on I2C
+	help
+	  To compile this driver as a module, choose M here: the
+	  module will be called atmel_1386.
+
+config TOUCHSCREEN_ATMEL_768E
+	tristate "Atmel Touchscreen Interface"
+	depends on I2C
+	help
+	  To compile this driver as a module, choose M here: the
+	  module will be called atmel_768e.
+
 config TOUCHSCREEN_BITSY
 	tristate "Compaq iPAQ H3600 (Bitsy) touchscreen"
 	depends on SA1100_BITSY
@@ -135,6 +149,14 @@ config TOUCHSCREEN_CY8CTMG110
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called cy8ctmg110_ts.
+
+config TOUCHSCREEN_CYPRESS
+	tristate "Cypress based touchscreen: I2C Interface"
+	default n
+	depends on I2C
+
+	help
+	  Say Y here if you have a cypress capacitive touchscreen
 
 config TOUCHSCREEN_DA9034
 	tristate "Touchscreen support for Dialog Semiconductor DA9034"
@@ -425,6 +447,14 @@ config TOUCHSCREEN_ATMEL_TSADCC
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called atmel_tsadcc.
+
+config TOUCHSCREEN_ATMEL_MXT1386E
+	tristate "Atmel_mXT1386 Touchscreen Interface"
+	depends on I2C
+	default n
+	help
+	  To compile this driver as a module, choose M here: the
+	  module will be called atmel_mxt1386e.
 
 config TOUCHSCREEN_UCB1400
 	tristate "Philips UCB1400 touchscreen"

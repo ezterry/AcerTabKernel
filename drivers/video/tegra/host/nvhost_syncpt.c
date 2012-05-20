@@ -24,6 +24,7 @@
 #include "nvhost_syncpt.h"
 #include "dev.h"
 
+#define MAX_STUCK_CHECK_COUNT 15
 
 /**
  * Resets syncpoint and waitbase values to sw shadows
@@ -83,6 +84,20 @@ u32 nvhost_syncpt_read(struct nvhost_syncpt *sp, u32 id)
 }
 
 /**
+ * Get the current syncpoint base
+ */
+u32 nvhost_syncpt_read_wait_base(struct nvhost_syncpt *sp, u32 id)
+{
+	u32 val;
+	BUG_ON(!syncpt_op(sp).read_wait_base);
+	nvhost_module_busy(&syncpt_to_dev(sp)->mod);
+	syncpt_op(sp).read_wait_base(sp, id);
+	val = sp->base_val[id];
+	nvhost_module_idle(&syncpt_to_dev(sp)->mod);
+	return val;
+}
+
+/**
  * Write a cpu syncpoint increment to the hardware, without touching
  * the cache. Caller is responsible for host being powered.
  */
@@ -112,16 +127,18 @@ int nvhost_syncpt_wait_timeout(struct nvhost_syncpt *sp, u32 id,
 	DECLARE_WAIT_QUEUE_HEAD_ONSTACK(wq);
 	void *ref;
 	void *waiter;
-	int err = 0;
+	int err = 0, check_count = 0, low_timeout = 0;
 
 	if (value)
 		*value = 0;
 
 	BUG_ON(!syncpt_op(sp).update_min);
 	if (!nvhost_syncpt_check_max(sp, id, thresh)) {
-		WARN(1, "wait %d (%s) for (%d) wouldn't be met (max %d)\n",
+		dev_warn(&syncpt_to_dev(sp)->pdev->dev,
+			"wait %d (%s) for (%d) wouldn't be met (max %d)\n",
 			id, syncpt_op(sp).name(sp, id), thresh,
 			nvhost_syncpt_read_max(sp, id));
+		nvhost_debug_dump(syncpt_to_dev(sp));
 		return -EINVAL;
 	}
 
@@ -181,13 +198,29 @@ int nvhost_syncpt_wait_timeout(struct nvhost_syncpt *sp, u32 id,
 			err = remain;
 			break;
 		}
-		if (timeout != NVHOST_NO_TIMEOUT)
+		if (timeout != NVHOST_NO_TIMEOUT) {
+			if (timeout < SYNCPT_CHECK_PERIOD) {
+				/* Caller-specified timeout may be impractically low */
+				low_timeout = timeout;
+			}
 			timeout -= check;
+		}
 		if (timeout) {
 			dev_warn(&syncpt_to_dev(sp)->pdev->dev,
-				"syncpoint id %d (%s) stuck waiting %d\n",
-				 id, syncpt_op(sp).name(sp, id), thresh);
+				"%s: syncpoint id %d (%s) stuck waiting %d, timeout=%d\n",
+				 current->comm, id, syncpt_op(sp).name(sp, id),
+				 thresh, timeout);
 			syncpt_op(sp).debug(sp);
+			if (check_count > MAX_STUCK_CHECK_COUNT) {
+				if (low_timeout) {
+					dev_warn(&syncpt_to_dev(sp)->pdev->dev,
+						"is timeout %d too low?\n",
+						low_timeout);
+				}
+				nvhost_debug_dump(syncpt_to_dev(sp));
+				BUG();
+			}
+			check_count++;
 		}
 	}
 	nvhost_intr_put_ref(&(syncpt_to_dev(sp)->intr), ref);
@@ -207,7 +240,8 @@ int nvhost_syncpt_wait_check(struct nvhost_syncpt *sp,
 			     struct nvmap_client *nvmap,
 			     u32 waitchk_mask,
 			     struct nvhost_waitchk *wait,
-			     struct nvhost_waitchk *waitend)
+			     int num_waitchk)
 {
-	return syncpt_op(sp).wait_check(sp, nvmap, waitchk_mask, wait, waitend);
+	return syncpt_op(sp).wait_check(sp, nvmap,
+			waitchk_mask, wait, num_waitchk);
 }

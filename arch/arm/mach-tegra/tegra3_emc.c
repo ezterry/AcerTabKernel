@@ -25,6 +25,7 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/delay.h>
+#include <linux/suspend.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 
@@ -195,9 +196,10 @@ static int tegra_emc_table_size;
 
 static u32 dram_dev_num;
 static u32 emc_cfg_saved;
-
 static u32 dram_type = -1;
+
 static struct clk *emc;
+static struct clk *bridge;
 
 static struct {
 	cputime64_t time_at_clock[TEGRA_EMC_TABLE_MAX_SIZE];
@@ -283,6 +285,20 @@ static inline void auto_cal_disable(void)
 	if (err) {
 		pr_err("%s: disable auto-cal error: %d", __func__, err);
 		BUG();
+	}
+}
+
+static inline void set_mc_arbiter_limits(void)
+{
+	u32 reg = mc_readl(MC_EMEM_ARB_OUTSTANDING_REQ);
+	u32 max_val = 0x50 << EMC_MRS_WAIT_CNT_SHORT_WAIT_SHIFT;
+
+	if (!(reg & MC_EMEM_ARB_OUTSTANDING_REQ_HOLDOFF_OVERRIDE) ||
+	    ((reg & MC_EMEM_ARB_OUTSTANDING_REQ_MAX_MASK) > max_val)) {
+		reg = MC_EMEM_ARB_OUTSTANDING_REQ_LIMIT_ENABLE |
+			MC_EMEM_ARB_OUTSTANDING_REQ_HOLDOFF_OVERRIDE | max_val;
+		mc_writel(reg, MC_EMEM_ARB_OUTSTANDING_REQ);
+		mc_writel(0x1, MC_TIMING_CONTROL);
 	}
 }
 
@@ -463,6 +479,11 @@ static noinline void emc_set_clock(const struct tegra_emc_table *next_timing,
 		emc_writel(emc_cfg_reg, EMC_CFG);
 		pre_wait = 5;		/* 5us+ for self-refresh entry/exit */
 	}
+
+	/* 2.25 update MC arbiter settings */
+	set_mc_arbiter_limits();
+
+	/* 2.5 check dq/dqs vref delay */
 	if (dqs_preset(next_timing, last_timing)) {
 		if (pre_wait < 3)
 			pre_wait = 3;	/* 3us+ for dqs vref settled */
@@ -565,6 +586,8 @@ static noinline void emc_set_clock(const struct tegra_emc_table *next_timing,
 			   EMC_AUTO_CAL_INTERVAL);
 
 	/* 16. restore dynamic self-refresh */
+	if (next_timing->rev >= 0x32)
+		dyn_sref_enabled = next_timing->emc_dsr;
 	if (dyn_sref_enabled) {
 		emc_cfg_reg |= EMC_CFG_DYN_SREF_ENABLE;
 		emc_writel(emc_cfg_reg, EMC_CFG);
@@ -604,9 +627,13 @@ static inline void emc_get_timing(struct tegra_emc_table *timing)
 static inline void emc_cfg_power_restore(void)
 {
 	u32 reg = emc_readl(EMC_CFG);
-	if ((reg ^ emc_cfg_saved) & EMC_CFG_PWR_MASK) {
-		reg = (reg & (~EMC_CFG_PWR_MASK)) |
-			(emc_cfg_saved & EMC_CFG_PWR_MASK);
+	u32 pwr_mask = EMC_CFG_PWR_MASK;
+
+	if (tegra_emc_table[0].rev >= 0x32)
+		pwr_mask &= ~EMC_CFG_DYN_SREF_ENABLE;
+
+	if ((reg ^ emc_cfg_saved) & pwr_mask) {
+		reg = (reg & (~pwr_mask)) | (emc_cfg_saved & pwr_mask);
 		emc_writel(reg, EMC_CFG);
 		emc_timing_update();
 	}
@@ -670,7 +697,7 @@ long tegra_emc_round_rate(unsigned long rate)
 	unsigned long distance = ULONG_MAX;
 
 	if (!tegra_emc_table)
-		return -EINVAL;
+		return clk_get_rate_locked(emc); /* no table - no rate change */
 
 	if (!emc_enable)
 		return -EINVAL;
@@ -742,11 +769,41 @@ static const struct clk_mux_sel *find_matching_input(
 	return NULL;
 }
 
+static void adjust_emc_dvfs_table(const struct tegra_emc_table *table,
+				  int table_size)
+{
+	int i, j;
+	unsigned long rate;
+
+	if (table[0].rev < 0x33)
+		return;
+
+	for (i = 0; i < MAX_DVFS_FREQS; i++) {
+		int mv = emc->dvfs->millivolts[i];
+		if (!mv)
+			break;
+
+		/* For each dvfs voltage find maximum supported rate;
+		   use 1MHz placeholder if not found */
+		for (rate = 1000, j = 0; j < table_size; j++) {
+			if (tegra_emc_clk_sel[j].input == NULL)
+				continue;	/* invalid entry */
+
+			if ((mv >= table[j].emc_min_mv) &&
+			    (rate < table[j].rate))
+				rate = table[j].rate;
+		}
+		/* Table entries specify rate in kHz */
+		emc->dvfs->freqs[i] = rate * 1000;
+	}
+}
+
 static bool is_emc_bridge(void)
 {
 	int mv;
 	unsigned long rate;
-	struct clk *bridge = tegra_get_clock_by_name("bridge.emc");
+
+	bridge = tegra_get_clock_by_name("bridge.emc");
 	BUG_ON(!bridge);
 
 	/* LPDDR2 does not need a bridge entry in DFS table: just lock bridge
@@ -772,28 +829,72 @@ static bool is_emc_bridge(void)
 	return true;
 }
 
+static int tegra_emc_suspend_notify(struct notifier_block *nb,
+				unsigned long event, void *data)
+{
+	if (event != PM_SUSPEND_PREPARE)
+		return NOTIFY_OK;
+
+	if (dram_type == DRAM_TYPE_DDR3) {
+		if (clk_enable(bridge)) {
+			pr_info("Tegra emc suspend:"
+				" failed to enable bridge.emc\n");
+			return NOTIFY_STOP;
+		}
+		pr_info("Tegra emc suspend: enabled bridge.emc\n");
+	}
+	return NOTIFY_OK;
+};
+static struct notifier_block tegra_emc_suspend_nb = {
+	.notifier_call = tegra_emc_suspend_notify,
+	.priority = 2,
+};
+
+static int tegra_emc_resume_notify(struct notifier_block *nb,
+				unsigned long event, void *data)
+{
+	if (event != PM_POST_SUSPEND)
+		return NOTIFY_OK;
+
+	if (dram_type == DRAM_TYPE_DDR3) {
+		clk_disable(bridge);
+		pr_info("Tegra emc resume: disabled bridge.emc\n");
+	}
+	return NOTIFY_OK;
+};
+static struct notifier_block tegra_emc_resume_nb = {
+	.notifier_call = tegra_emc_resume_notify,
+	.priority = -1,
+};
+
 void tegra_init_emc(const struct tegra_emc_table *table, int table_size)
 {
-	int i;
+	int i, mv;
 	u32 reg, div_value;
 	bool max_entry = false;
 	unsigned long boot_rate, max_rate;
 	const struct clk_mux_sel *sel;
 
-	emc_cfg_saved = emc_readl(EMC_CFG);
-
 	emc_stats.clkchange_count = 0;
 	spin_lock_init(&emc_stats.spinlock);
 	emc_stats.last_update = get_jiffies_64();
 
-	emc = tegra_get_clock_by_name("emc");
-	BUG_ON(!emc);
 	boot_rate = clk_get_rate(emc) / 1000;
 	max_rate = clk_get_max_rate(emc) / 1000;
 
+	if ((dram_type != DRAM_TYPE_DDR3) && (dram_type != DRAM_TYPE_LPDDR2)) {
+		pr_err("tegra: not supported DRAM type %u\n", dram_type);
+		return;
+	}
+
 	if (emc->parent != tegra_get_clock_by_name("pll_m")) {
-		pr_warn("tegra: boot parent %s is not supported by EMC DFS\n",
+		pr_err("tegra: boot parent %s is not supported by EMC DFS\n",
 			emc->parent->name);
+		return;
+	}
+
+	if (!table || !table_size) {
+		pr_err("tegra: EMC DFS table is empty\n");
 		return;
 	}
 
@@ -803,18 +904,23 @@ void tegra_init_emc(const struct tegra_emc_table *table, int table_size)
 		emc_num_burst_regs = 105;
 		break;
 	case 0x31:
+	case 0x32:
+	case 0x33:
 		emc_num_burst_regs = 107;
 		break;
 	default:
-		pr_warn("tegra: invalid EMC DFS table: unknown rev 0x%x\n",
+		pr_err("tegra: invalid EMC DFS table: unknown rev 0x%x\n",
 			table[0].rev);
 		return;
 	}
 
+	/* Match EMC source/divider settings with table entries */
 	for (i = 0; i < tegra_emc_table_size; i++) {
 		unsigned long table_rate = table[i].rate;
 		if (!table_rate)
 			continue;
+
+		BUG_ON(table[i].rev != table[0].rev);
 
 		sel = find_matching_input(table_rate, &div_value);
 		if (!sel)
@@ -842,22 +948,7 @@ void tegra_init_emc(const struct tegra_emc_table *table, int table_size)
 			tegra_emc_clk_sel[i].value |= EMC_CLK_MC_SAME_FREQ;
 	}
 
-	dram_type = (emc_readl(EMC_FBIO_CFG5) &
-		     EMC_CFG5_TYPE_MASK) >> EMC_CFG5_TYPE_SHIFT;
-	if ((dram_type != DRAM_TYPE_DDR3) && (dram_type != DRAM_TYPE_LPDDR2)) {
-		pr_err("Not supported DRAM type %u\n", dram_type);
-		return;
-	}
-	if (dram_type == DRAM_TYPE_DDR3)
-		emc->min_rate = EMC_MIN_RATE_DDR3;
-
-	reg = emc_readl(EMC_CFG_2) & (~EMC_CFG_2_MODE_MASK);
-	reg |= ((dram_type == DRAM_TYPE_LPDDR2) ? EMC_CFG_2_PD_MODE :
-		EMC_CFG_2_SREF_MODE) << EMC_CFG_2_MODE_SHIFT;
-	emc_writel(reg, EMC_CFG_2);
-
-	dram_dev_num = (mc_readl(MC_EMEM_ADR_CFG) & 0x1) + 1; /* 2 dev max */
-
+	/* Validate EMC rate and voltage limits */
 	if (!max_entry) {
 		pr_err("tegra: invalid EMC DFS table: entry for max rate"
 		       " %lu kHz is not found\n", max_rate);
@@ -866,16 +957,49 @@ void tegra_init_emc(const struct tegra_emc_table *table, int table_size)
 
 	tegra_emc_table = table;
 
+	adjust_emc_dvfs_table(tegra_emc_table, tegra_emc_table_size);
+	mv = tegra_dvfs_predict_millivolts(emc, max_rate * 1000);
+	if ((mv <= 0) || (mv > emc->dvfs->max_millivolts)) {
+		tegra_emc_table = NULL;
+		pr_err("tegra: invalid EMC DFS table: maximum rate %lu kHz does"
+		       " not match nominal voltage %d\n",
+		       max_rate, emc->dvfs->max_millivolts);
+		return;
+	}
+
 	if (!is_emc_bridge()) {
 		tegra_emc_table = NULL;
 		pr_err("tegra: invalid EMC DFS table: emc bridge not found");
+		return;
 	}
 	pr_info("tegra: validated EMC DFS table\n");
+
+	/* Configure clock change mode according to dram type */
+	reg = emc_readl(EMC_CFG_2) & (~EMC_CFG_2_MODE_MASK);
+	reg |= ((dram_type == DRAM_TYPE_LPDDR2) ? EMC_CFG_2_PD_MODE :
+		EMC_CFG_2_SREF_MODE) << EMC_CFG_2_MODE_SHIFT;
+	emc_writel(reg, EMC_CFG_2);
+
+	register_pm_notifier(&tegra_emc_suspend_nb);
+	register_pm_notifier(&tegra_emc_resume_nb);
 }
 
 void tegra_emc_timing_invalidate(void)
 {
 	emc_timing_in_sync = false;
+}
+
+void tegra_emc_dram_type_init(struct clk *c)
+{
+	emc = c;
+
+	dram_type = (emc_readl(EMC_FBIO_CFG5) &
+		     EMC_CFG5_TYPE_MASK) >> EMC_CFG5_TYPE_SHIFT;
+	if (dram_type == DRAM_TYPE_DDR3)
+		emc->min_rate = EMC_MIN_RATE_DDR3;
+
+	dram_dev_num = (mc_readl(MC_EMEM_ADR_CFG) & 0x1) + 1; /* 2 dev max */
+	emc_cfg_saved = emc_readl(EMC_CFG);
 }
 
 int tegra_emc_get_dram_type(void)

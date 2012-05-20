@@ -33,6 +33,7 @@
 #include <linux/tegra_nvavp.h>
 #include <linux/types.h>
 #include <linux/vmalloc.h>
+#include <linux/workqueue.h>
 
 #include <mach/clk.h>
 #include <mach/hardware.h>
@@ -43,6 +44,7 @@
 
 #include "../../../../video/tegra/nvmap/nvmap.h"
 #include "../../../../video/tegra/host/t20/syncpt_t20.h"
+#include "../../../../video/tegra/host/nvhost_acm.h"
 #include "../../../../video/tegra/host/dev.h"
 #if defined(CONFIG_TEGRA_AVP_KERNEL_ON_MMU)
 #include "../avp/headavp.h"
@@ -67,7 +69,11 @@
 
 #define NVAVP_INBOX_VALID		(1 << 29)
 
+/* AVP behavior params */
+#define NVAVP_OS_IDLE_TIMEOUT		100 /* milli-seconds */
+
 struct nvavp_info {
+	u32				clk_enabled;
 	struct clk			*bsev_clk;
 	struct clk			*vde_clk;
 	struct clk			*cop_clk;
@@ -75,11 +81,15 @@ struct nvavp_info {
 	/* used for dvfs */
 	struct clk			*sclk;
 	struct clk			*emc_clk;
+	unsigned long			sclk_rate;
+	unsigned long			emc_clk_rate;
 
 	int				mbox_from_avp_pend_irq;
 
 	struct mutex			open_lock;
 	int				refcount;
+
+	struct work_struct		clock_disable_work;
 
 	/* os information */
 	struct nvavp_os_info		os_info;
@@ -131,6 +141,47 @@ static struct clk *nvavp_clk_get(struct nvavp_info *nvavp, int id)
 	return NULL;
 }
 
+static void nvavp_clk_ctrl(struct nvavp_info *nvavp, u32 clk_en)
+{
+	if (clk_en && !nvavp->clk_enabled) {
+		clk_enable(nvavp->bsev_clk);
+		clk_enable(nvavp->vde_clk);
+		clk_set_rate(nvavp->emc_clk, nvavp->emc_clk_rate);
+		clk_set_rate(nvavp->sclk, nvavp->sclk_rate);
+		nvavp->clk_enabled = 1;
+		dev_dbg(&nvavp->nvhost_dev->dev, "%s: setting sclk to %lu\n",
+				__func__, nvavp->sclk_rate);
+		dev_dbg(&nvavp->nvhost_dev->dev, "%s: setting emc_clk to %lu\n",
+				__func__, nvavp->emc_clk_rate);
+	} else if (!clk_en && nvavp->clk_enabled) {
+		clk_disable(nvavp->bsev_clk);
+		clk_disable(nvavp->vde_clk);
+		clk_set_rate(nvavp->emc_clk, 0);
+		clk_set_rate(nvavp->sclk, 0);
+		nvavp->clk_enabled = 0;
+		dev_dbg(&nvavp->nvhost_dev->dev, "%s: resetting emc_clk "
+				"and sclk\n", __func__);
+	}
+}
+
+static u32 nvavp_check_idle(struct nvavp_info *nvavp)
+{
+	struct nv_e276_control *control = nvavp->os_control;
+	return (control->put == control->get) ? 1 : 0;
+}
+
+static void clock_disable_handler(struct work_struct *work)
+{
+	struct nvavp_info *nvavp;
+
+	nvavp = container_of(work, struct nvavp_info,
+			    clock_disable_work);
+
+	mutex_lock(&nvavp->pushbuffer_lock);
+	nvavp_clk_ctrl(nvavp, !nvavp_check_idle(nvavp));
+	mutex_unlock(&nvavp->pushbuffer_lock);
+}
+
 static int nvavp_service(struct nvavp_info *nvavp)
 {
 	struct nvavp_os_info *os = &nvavp->os_info;
@@ -143,19 +194,14 @@ static int nvavp_service(struct nvavp_info *nvavp)
 
 	writel(0x00000000, NVAVP_OS_INBOX);
 
+	if (inbox & NVE276_OS_INTERRUPT_VIDEO_IDLE)
+		schedule_work(&nvavp->clock_disable_work);
+
 	if (inbox & NVE276_OS_INTERRUPT_DEBUG_STRING) {
 		/* Should only occur with debug AVP OS builds */
 		debug_print = os->data;
 		debug_print += os->debug_offset;
 		dev_info(&nvavp->nvhost_dev->dev, "%s\n", debug_print);
-	}
-	if (inbox & NVE276_OS_INTERRUPT_VDE_SHUTDOWN) {
-		/* TODO: We may want to put some sort of
-		 * synchronization in place (resource semaphores ?)
-		 * so that AVP can set VDE clocks without
-		 * involving RM (as this is likely to occur often)
-		 */
-		dev_info(&nvavp->nvhost_dev->dev, "shutting down VDE...\n");
 	}
 	if (inbox & (NVE276_OS_INTERRUPT_SEMAPHORE_AWAKEN |
 		     NVE276_OS_INTERRUPT_EXECUTE_AWAKEN)) {
@@ -189,9 +235,6 @@ static void nvavp_halt_avp(struct nvavp_info *nvavp)
 	writel(FLOW_MODE_STOP, FLOW_CTRL_HALT_COP_EVENTS);
 	tegra_periph_reset_assert(nvavp->cop_clk);
 
-	clk_disable(nvavp->sclk);
-	clk_disable(nvavp->emc_clk);
-
 	writel(0, NVAVP_OS_OUTBOX);
 	writel(0, NVAVP_OS_INBOX);
 }
@@ -218,6 +261,12 @@ static int nvavp_reset_avp(struct nvavp_info *nvavp, unsigned long reset_addr)
 	clk_enable(nvavp->sclk);
 	clk_enable(nvavp->emc_clk);
 
+	/* If sclk_rate and emc_clk is not set by user space,
+	 * max clock in dvfs table will be used to get best performance.
+	 */
+	nvavp->sclk_rate = ULONG_MAX;
+	nvavp->emc_clk_rate = ULONG_MAX;
+
 	tegra_periph_reset_assert(nvavp->cop_clk);
 	udelay(2);
 	tegra_periph_reset_deassert(nvavp->cop_clk);
@@ -234,10 +283,13 @@ static int nvavp_reset_avp(struct nvavp_info *nvavp, unsigned long reset_addr)
 
 static void nvavp_halt_vde(struct nvavp_info *nvavp)
 {
-	tegra_periph_reset_assert(nvavp->bsev_clk);
-	clk_disable(nvavp->bsev_clk);
-	tegra_periph_reset_assert(nvavp->vde_clk);
-	clk_disable(nvavp->vde_clk);
+	if (nvavp->clk_enabled) {
+		tegra_periph_reset_assert(nvavp->bsev_clk);
+		clk_disable(nvavp->bsev_clk);
+		tegra_periph_reset_assert(nvavp->vde_clk);
+		clk_disable(nvavp->vde_clk);
+		nvavp->clk_enabled = 0;
+	}
 }
 
 static int nvavp_reset_vde(struct nvavp_info *nvavp)
@@ -251,6 +303,15 @@ static int nvavp_reset_vde(struct nvavp_info *nvavp)
 	tegra_periph_reset_assert(nvavp->vde_clk);
 	udelay(2);
 	tegra_periph_reset_deassert(nvavp->vde_clk);
+
+	/*
+	 * VDE clock is set to max freq by default.
+	 * VDE clock can be set to different freq if needed
+	 * through ioctl.
+	 */
+	clk_set_rate(nvavp->vde_clk, ULONG_MAX);
+
+	nvavp->clk_enabled = 1;
 	return 0;
 }
 
@@ -320,13 +381,19 @@ static int nvavp_pushbuffer_init(struct nvavp_info *nvavp)
 	nvavp->os_control = (struct nv_e276_control *)ptr;
 
 	control = nvavp->os_control;
+	memset(control, 0, sizeof(struct nvavp_os_info));
 
 	/* init get and put pointers */
 	writel(0x0, &control->put);
 	writel(0x0, &control->get);
-	/* enable host clock control and disable iram clock gating */
-	writel(0x1, &control->idle_clk_enable);
+
+	/* enable avp VDE clock control and disable iram clock gating */
+	writel(0x0, &control->idle_clk_enable);
 	writel(0x0, &control->iram_clk_gating);
+
+	/* enable avp idle timeout interrupt */
+	writel(0x1, &control->idle_notify_enable);
+	writel(NVAVP_OS_IDLE_TIMEOUT, &control->idle_notify_delay);
 
 	/* init dma start and end pointers */
 	writel(nvavp->pushbuf_phys, &control->dma_start);
@@ -409,6 +476,10 @@ static int nvavp_pushbuffer_update(struct nvavp_info *nvavp, u32 phys_addr,
 		writel(sync, (nvavp->pushbuf_data + index));
 		wordcount += sizeof(u32);
 	}
+
+	/* enable clocks to VDE/BSEV */
+	nvavp_clk_ctrl(nvavp, 1);
+
 	/* update put pointer */
 	nvavp->pushbuf_index = (nvavp->pushbuf_index + wordcount) &
 					(NVAVP_PUSHBUFFER_SIZE - 1);
@@ -451,11 +522,21 @@ static int nvavp_load_ucode(struct nvavp_info *nvavp)
 		ret = request_firmware(&nvavp_ucode_fw, fw_ucode_file,
 					nvavp->misc_dev.this_device);
 		if (ret) {
-			dev_err(&nvavp->nvhost_dev->dev,
-				"cannot read ucode firmware '%s'\n",
-				fw_ucode_file);
-			goto err_req_ucode;
+			/* Try alternative version */
+			sprintf(fw_ucode_file, "nvavp_vid_ucode_alt.bin");
+
+			ret = request_firmware(&nvavp_ucode_fw,
+						fw_ucode_file,
+						nvavp->misc_dev.this_device);
+
+			if (ret) {
+				dev_err(&nvavp->nvhost_dev->dev,
+					"cannot read ucode firmware '%s'\n",
+					fw_ucode_file);
+				goto err_req_ucode;
+			}
 		}
+
 		dev_info(&nvavp->nvhost_dev->dev,
 			"read ucode firmware from '%s' (%d bytes)\n",
 			fw_ucode_file, nvavp_ucode_fw->size);
@@ -515,7 +596,7 @@ err_ucode_pin:
 err_ucode_mmap:
 	nvmap_free(nvavp->nvmap, ucode_info->handle);
 err_ucode_alloc:
-	kfree(nvavp);
+	kfree(nvavp->ucode_info.ucode_bin);
 err_ubin_alloc:
 	release_firmware(nvavp_ucode_fw);
 err_req_ucode:
@@ -524,10 +605,12 @@ err_req_ucode:
 
 static void nvavp_unload_os(struct nvavp_info *nvavp)
 {
-#if defined(CONFIG_TEGRA_AVP_KERNEL_ON_MMU)
 	nvmap_unpin(nvavp->nvmap, nvavp->os_info.handle);
 	nvmap_munmap(nvavp->os_info.handle, nvavp->os_info.data);
+#if defined(CONFIG_TEGRA_AVP_KERNEL_ON_MMU)
 	nvmap_free(nvavp->nvmap, nvavp->os_info.handle);
+#elif defined(CONFIG_TEGRA_AVP_KERNEL_ON_SMMU)
+	nvmap_free_iovm(nvavp->nvmap, nvavp->os_info.handle);
 #endif
 	kfree(nvavp->os_info.os_bin);
 }
@@ -690,10 +773,16 @@ err_exit:
 static void nvavp_uninit(struct nvavp_info *nvavp)
 {
 	disable_irq(nvavp->mbox_from_avp_pend_irq);
+
+	cancel_work_sync(&nvavp->clock_disable_work);
+
 	nvavp_pushbuffer_deinit(nvavp);
 
 	nvavp_halt_vde(nvavp);
 	nvavp_halt_avp(nvavp);
+
+	clk_disable(nvavp->sclk);
+	clk_disable(nvavp->emc_clk);
 }
 
 static int nvavp_set_clock_ioctl(struct file *filp, unsigned int cmd,
@@ -707,14 +796,23 @@ static int nvavp_set_clock_ioctl(struct file *filp, unsigned int cmd,
 	if (copy_from_user(&config, (void __user *)arg, sizeof(struct nvavp_clock_args)))
 		return -EFAULT;
 
+	dev_dbg(&nvavp->nvhost_dev->dev, "%s: clk_id=%d, clk_rate=%u\n",
+			__func__, config.id, (unsigned)config.rate);
+
+	if (config.id == NVAVP_MODULE_ID_AVP)
+		nvavp->sclk_rate = config.rate;
+	else if	(config.id == NVAVP_MODULE_ID_EMC)
+		nvavp->emc_clk_rate = config.rate;
+
 	c = nvavp_clk_get(nvavp, config.id);
 	if (IS_ERR_OR_NULL(c))
 		return -EINVAL;
 
+	clk_enable(c);
 	clk_set_rate(c, config.rate);
 
 	config.rate = clk_get_rate(c);
-
+	clk_disable(c);
 	if (copy_to_user((void __user *)arg, &config, sizeof(struct nvavp_clock_args)))
 		return -EFAULT;
 
@@ -736,7 +834,9 @@ static int nvavp_get_clock_ioctl(struct file *filp, unsigned int cmd,
 	if (IS_ERR_OR_NULL(c))
 		return -EINVAL;
 
+	clk_enable(c);
 	config.rate = clk_get_rate(c);
+	clk_disable(c);
 
 	if (copy_to_user((void __user *)arg, &config, sizeof(struct nvavp_clock_args)))
 		return -EFAULT;
@@ -903,6 +1003,8 @@ static int tegra_nvavp_open(struct inode *inode, struct file *filp)
 	int ret = 0;
 	struct nvavp_clientctx *clientctx;
 
+	dev_dbg(&nvavp->nvhost_dev->dev, "%s: ++\n", __func__);
+
 	nonseekable_open(inode, filp);
 
 	clientctx = kzalloc(sizeof(*clientctx), GFP_KERNEL);
@@ -932,6 +1034,8 @@ static int tegra_nvavp_release(struct inode *inode, struct file *filp)
 	struct nvavp_clientctx *clientctx = filp->private_data;
 	struct nvavp_info *nvavp = clientctx->nvavp;
 	int ret = 0;
+
+	dev_dbg(&nvavp->nvhost_dev->dev, "%s: ++\n", __func__);
 
 	filp->private_data = NULL;
 
@@ -1024,6 +1128,8 @@ static int tegra_nvavp_probe(struct nvhost_device *ndev)
 		ret = -ENOENT;
 		goto err_get_syncpt;
 	}
+
+	nvhost_module_busy(&ndev->host->mod);
 
 	nvavp->nvmap = nvmap_create_client(nvmap_dev, "nvavp_drv");
 	if (IS_ERR_OR_NULL(nvavp->nvmap)) {
@@ -1155,7 +1261,10 @@ static int tegra_nvavp_probe(struct nvhost_device *ndev)
 		goto err_get_emc_clk;
 	}
 
+	nvavp->clk_enabled = 0;
 	nvavp_halt_avp(nvavp);
+
+	INIT_WORK(&nvavp->clock_disable_work, clock_disable_handler);
 
 	nvavp->misc_dev.minor = MISC_DYNAMIC_MINOR;
 	nvavp->misc_dev.name = "tegra_avpchannel";
@@ -1199,7 +1308,11 @@ err_get_cop_clk:
 err_nvmap_pin:
 	nvmap_munmap(nvavp->os_info.handle, nvavp->os_info.data);
 err_nvmap_mmap:
+#if defined(CONFIG_TEGRA_AVP_KERNEL_ON_MMU)
 	nvmap_free(nvavp->nvmap, nvavp->os_info.handle);
+#elif defined(CONFIG_TEGRA_AVP_KERNEL_ON_SMMU)
+	nvmap_free_iovm(nvavp->nvmap, nvavp->os_info.handle);
+#endif
 err_nvmap_alloc:
 	nvmap_client_put(nvavp->nvmap);
 err_nvmap_create_drv_client:
@@ -1227,8 +1340,13 @@ static int tegra_nvavp_remove(struct nvhost_device *ndev)
 
 	misc_deregister(&nvavp->misc_dev);
 
+	clk_put(nvavp->bsev_clk);
 	clk_put(nvavp->vde_clk);
 	clk_put(nvavp->cop_clk);
+	nvhost_module_idle(&ndev->host->mod);
+
+	clk_put(nvavp->emc_clk);
+	clk_put(nvavp->sclk);
 
 	nvmap_client_put(nvavp->nvmap);
 
@@ -1239,11 +1357,13 @@ static int tegra_nvavp_remove(struct nvhost_device *ndev)
 #ifdef CONFIG_PM
 static int tegra_nvavp_suspend(struct nvhost_device *ndev, pm_message_t state)
 {
+	nvhost_module_idle(&ndev->host->mod);
 	return 0;
 }
 
 static int tegra_nvavp_resume(struct nvhost_device *ndev)
 {
+	nvhost_module_busy(&ndev->host->mod);
 	return 0;
 }
 #endif

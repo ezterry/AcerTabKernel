@@ -23,6 +23,7 @@
 #include <linux/interrupt.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/irq.h>
 
 #include <mach/gpio.h>
 #include <mach/iomap.h>
@@ -35,10 +36,10 @@
 
 #include "clock.h"
 #include "cpuidle.h"
-#include "gpio-names.h"
 #include "pm.h"
 #include "sleep.h"
 #include "tegra3_emc.h"
+#include "dvfs.h"
 
 #ifdef CONFIG_TEGRA_CLUSTER_CONTROL
 #define CAR_CCLK_BURST_POLICY \
@@ -225,14 +226,30 @@ done:
 	writel(reg, FLOW_CTRL_CPU_CSR(0));
 }
 
+
+static void cluster_switch_epilog_actlr(void)
+{
+	u32 actlr;
+
+	/* TLB maintenance broadcast bit (FW) is stubbed out on LP CPU (reads
+	   as zero, writes ignored). Hence, it is not preserved across G=>LP=>G
+	   switch by CPU save/restore code, but SMP bit is restored correctly.
+	   Synchronize these two bits here after LP=>G transition. Note that
+	   only CPU0 core is powered on before and after the switch. See also
+	   bug 807595. */
+
+	__asm__("mrc p15, 0, %0, c1, c0, 1\n" : "=r" (actlr));
+
+	if (actlr & (0x1 << 6)) {
+		actlr |= 0x1;
+		__asm__("mcr p15, 0, %0, c1, c0, 1\n" : : "r" (actlr));
+	}
+}
+
 static void cluster_switch_epilog_gic(void)
 {
 	unsigned int max_irq, i;
 	void __iomem *gic_base = IO_ADDRESS(TEGRA_ARM_INT_DIST_BASE);
-
-	/* Nothing to do if currently running on the LP CPU. */
-	if (is_lp_cluster())
-		return;
 
 	/* Reprogram the interrupt affinity because the on the LP CPU,
 	   the interrupt distributor affinity regsiters are stubbed out
@@ -245,8 +262,25 @@ static void cluster_switch_epilog_gic(void)
 	max_irq = readl(gic_base + GIC_DIST_CTR) & 0x1f;
 	max_irq = (max_irq + 1) * 32;
 
-	for (i = 32; i < max_irq; i += 4)
-		writel(0x01010101, gic_base + GIC_DIST_TARGET + i * 4 / 4);
+	for (i = 32; i < max_irq; i += 4) {
+		u32 val = 0x01010101;
+#ifdef CONFIG_GIC_SET_MULTIPLE_CPUS
+		unsigned int irq;
+		for (irq = i; irq < (i + 4); irq++) {
+			struct cpumask mask;
+			struct irq_desc *desc = irq_to_desc(irq);
+
+			if (desc && desc->affinity_hint &&
+			    desc->irq_data.affinity) {
+				if (cpumask_and(&mask, desc->affinity_hint,
+						desc->irq_data.affinity))
+					val |= (*cpumask_bits(&mask) & 0xff) <<
+						((irq & 3) * 8);
+			}
+		}
+#endif
+		writel(val, gic_base + GIC_DIST_TARGET + i * 4 / 4);
+	}
 }
 
 void tegra_cluster_switch_epilog(unsigned int flags)
@@ -261,8 +295,11 @@ void tegra_cluster_switch_epilog(unsigned int flags)
 		 FLOW_CTRL_CPU_CSR_SWITCH_CLUSTER);
 	writel(reg, FLOW_CTRL_CPU_CSR(0));
 
-	/* Perform post-switch clean-up of the interrupt distributor */
-	cluster_switch_epilog_gic();
+	/* Perform post-switch LP=>G clean-up */
+	if (!is_lp_cluster()) {
+		cluster_switch_epilog_actlr();
+		cluster_switch_epilog_gic();
+	}
 
 	#if DEBUG_CLUSTER_SWITCH
 	{
@@ -304,26 +341,32 @@ int tegra_cluster_control(unsigned int us, unsigned int flags)
 	if (flags & TEGRA_POWER_CLUSTER_IMMEDIATE)
 		us = 0;
 
-	if (current_cluster != target_cluster && !timekeeping_suspended) {
-		if (target_cluster == TEGRA_POWER_CLUSTER_G) {
-			s64 t = ktime_to_us(ktime_sub(ktime_get(), last_g2lp));
-			s64 t_off = tegra_cpu_power_off_time();
-			if (t_off > t)
-				udelay((unsigned int)(t_off - t));
-		}
-		else
-			last_g2lp = ktime_get();
-	}
-
 	DEBUG_CLUSTER(("%s(LP%d): %s->%s %s %s %d\r\n", __func__,
 		(flags & TEGRA_POWER_SDRAM_SELFREFRESH) ? 1 : 2,
 		is_lp_cluster() ? "LP" : "G",
 		(target_cluster == TEGRA_POWER_CLUSTER_G) ? "G" : "LP",
 		(flags & TEGRA_POWER_CLUSTER_IMMEDIATE) ? "immediate" : "",
 		(flags & TEGRA_POWER_CLUSTER_FORCE) ? "force" : "",
-	        us));
+		us));
 
 	local_irq_save(irq_flags);
+
+	if (current_cluster != target_cluster && !timekeeping_suspended) {
+		ktime_t now = ktime_get();
+		if (target_cluster == TEGRA_POWER_CLUSTER_G) {
+			s64 t = ktime_to_us(ktime_sub(now, last_g2lp));
+			s64 t_off = tegra_cpu_power_off_time();
+			if (t_off > t)
+				udelay((unsigned int)(t_off - t));
+
+			tegra_dvfs_rail_on(tegra_cpu_rail, now);
+
+		} else {
+			last_g2lp = now;
+			tegra_dvfs_rail_off(tegra_cpu_rail, now);
+		}
+	}
+
 	if (flags & TEGRA_POWER_SDRAM_SELFREFRESH) {
 		if (us)
 			tegra_lp2_set_trigger(us);
@@ -350,21 +393,17 @@ int tegra_cluster_control(unsigned int us, unsigned int flags)
 #endif
 
 #ifdef CONFIG_PM_SLEEP
-static u32 mc_reserved_rsv;
-static u32 mc_emem_arb_override;
 
 void tegra_lp0_suspend_mc(void)
 {
-	void __iomem *mc = IO_ADDRESS(TEGRA_MC_BASE);
-	mc_reserved_rsv = readl(mc + MC_RESERVED_RSV);
-	mc_emem_arb_override = readl(mc + MC_EMEM_ARB_OVERRIDE);
+	/* Since memory frequency after LP0 is restored to boot rate
+	   mc timing is saved during init, not on entry to LP0. Keep
+	   this hook just in case, anyway */
 }
 
 void tegra_lp0_resume_mc(void)
 {
-	void __iomem *mc = IO_ADDRESS(TEGRA_MC_BASE);
-	writel(mc_reserved_rsv, mc + MC_RESERVED_RSV);
-	writel(mc_emem_arb_override, mc + MC_EMEM_ARB_OVERRIDE);
+	tegra_mc_timing_restore();
 }
 
 void tegra_lp0_cpu_mode(bool enter)

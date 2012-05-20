@@ -17,6 +17,8 @@ config ARCH_TEGRA_2x_SOC
 	select USB_ARCH_HAS_EHCI if USB_SUPPORT
 	select USB_ULPI if USB_SUPPORT
 	select USB_ULPI_VIEWPORT if USB_SUPPORT
+	select ARCH_SUPPORTS_MSI if TEGRA_PCI
+	select PCI_MSI if TEGRA_PCI
 	help
 	  Support for NVIDIA Tegra AP20 and T20 processors, based on the
 	  ARM CortexA9MP CPU and the ARM PL310 L2 cache controller
@@ -29,12 +31,15 @@ config ARCH_TEGRA_3x_SOC
 	select ARCH_TEGRA_HAS_DUAL_CPU_CLUSTERS
 	select CPU_V7
 	select ARM_GIC
+	select GIC_SET_MULTIPLE_CPUS
 	select ARCH_REQUIRE_GPIOLIB
 	select USB_ARCH_HAS_EHCI if USB_SUPPORT
 	select USB_EHCI_TEGRA if USB_SUPPORT
 	select USB_ULPI if USB_SUPPORT
 	select USB_ULPI_VIEWPORT if USB_SUPPORT
 	select REPORT_PRESENT_CPUS if TEGRA_AUTO_HOTPLUG
+	select ARCH_SUPPORTS_MSI if TEGRA_PCI
+	select PCI_MSI if TEGRA_PCI
 	help
 	  Support for NVIDIA Tegra 3 family of SoCs, based upon the
 	  ARM CortexA9MP CPU and the ARM PL310 L2 cache controller
@@ -52,9 +57,57 @@ config ARCH_TEGRA_HAS_SATA
 	bool
 
 config TEGRA_PCI
-	bool "PCI Express support"
+	bool "PCIe host controller driver"
 	select PCI
 	depends on ARCH_TEGRA_HAS_PCIE
+	help
+	  Adds PCIe Host controller driver for tegra based systems
+
+comment "Acer Tegra Platform options"
+
+config ARCH_ACER_T20
+	depends on ARCH_TEGRA_2x_SOC
+	bool "Acer T20 platform"
+
+config ARCH_ACER_T30
+	depends on ARCH_TEGRA_3x_SOC
+	bool "Acer T30 platform"
+
+comment "Acer board type"
+
+config MACH_PICASSO
+	bool "Picasso"
+	depends on ARCH_ACER_T20
+	select MACH_HAS_SND_SOC_TEGRA_WM8903 if SND_SOC
+	help
+	  Support for Acer Picasso Tablet
+
+config MACH_VANGOGH
+	bool "Vangogh"
+	depends on ARCH_ACER_T20
+	select MACH_HAS_SND_SOC_TEGRA_WM8903 if SND_SOC
+	help
+	  Support for Acer Vangogh Tablet
+
+config MACH_PICASSO_E
+	bool "Picasso E"
+	depends on MACH_PICASSO
+	help
+	  Support for Acer Picasso E Tablet
+
+config MACH_PICASSO2
+	bool "Picasso 2"
+	depends on ARCH_ACER_T30
+	select MACH_HAS_SND_SOC_TEGRA_WM8903 if SND_SOC
+	help
+	  Support for Acer Picasso 2 Tablet
+
+config MACH_PICASSO_M
+	bool "Picasso M"
+	depends on ARCH_ACER_T30
+	select MACH_HAS_SND_SOC_TEGRA_WM8903 if SND_SOC
+	help
+	  Support for Acer Picasso M Tablet
 
 comment "Tegra board type"
 
@@ -74,6 +127,7 @@ config MACH_VENTANA
 
 config MACH_KAEN
        bool "Kaen board"
+       depends on ARCH_TEGRA_2x_SOC
        select MACH_SEABOARD
        select MACH_HAS_SND_SOC_TEGRA_WM8903 if SND_SOC
        help
@@ -112,6 +166,7 @@ config MACH_WHISTLER
        bool "Whistler board"
        depends on ARCH_TEGRA_2x_SOC
        select MACH_HAS_SND_SOC_TEGRA_WM8753 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_TLV320AIC326X if SND_SOC
        help
          Support for NVIDIA Whistler development platform
 
@@ -160,6 +215,8 @@ config TEGRA_FPGA_PLATFORM
           on a FPGA platform.
 endchoice
 
+source "arch/arm/mach-tegra/p852/Kconfig"
+
 choice
         prompt "Low-level debug console UART"
         default TEGRA_DEBUG_UART_NONE
@@ -194,13 +251,6 @@ config TEGRA_SYSTEM_DMA
 	help
 	  Adds system DMA functionality for NVIDIA Tegra SoCs, used by
 	  several Tegra device drivers
-
-config TEGRA_SPI_SLAVE
-       tristate "Nvidia Tegra SPI slave driver"
-       depends on ARCH_TEGRA
-       select TEGRA_SYSTEM_DMA
-       help
-         SPI slave driver for NVIDIA Tegra SoCs
 
 config TEGRA_PWM
 	tristate "Enable PWM driver"
@@ -246,7 +296,8 @@ config TEGRA_IOVMM_GART
 	help
 	  Enables support for remapping discontiguous physical memory
 	  shared with the operating system into contiguous I/O virtual
-	  space through the GART hardware included on Tegra SoCs
+	  space through the GART (Graphics Address Relocation Table)
+	  hardware included on Tegra SoCs.
 
 config TEGRA_IOVMM_SMMU
 	bool "Enable I/O virtual memory manager for SMMU"
@@ -256,7 +307,16 @@ config TEGRA_IOVMM_SMMU
 	help
 	  Enables support for remapping discontiguous physical memory
 	  shared with the operating system into contiguous I/O virtual
-	  space through the SMMU hardware included on Tegra SoCs
+	  space through the SMMU (System Memory Management Unit)
+	  hardware included on Tegra SoCs.
+
+config TEGRA_SMMU_BASE_AT_E0000000
+	bool "Force SMMU IOVA base to 0xe0000000"
+	depends on TEGRA_IOVMM_SMMU
+	default n
+	help
+	  Forces SMMU IOVA base address to 0xe0000000 for debug purposes
+	  only. Select n for production systems.
 
 config TEGRA_IOVMM_SMMU_SYSFS
 	bool "Enable SMMU register access for debugging"
@@ -336,6 +396,13 @@ config TEGRA_EDP_LIMITS
 	  of on-line CPUs to keep CPU rail current within power supply
 	  capabilities.
 
+config TEGRA_INTERNAL_TSENSOR_EDP_SUPPORT
+	bool "Enable EDP and thermal throttling using internal TSensor"
+	depends on TEGRA_EDP_LIMITS && ARCH_TEGRA_3x_SOC
+	help
+	  When enabled, uses internal tsensor to support EDP and
+	  thermal throttling on tegra platform
+
 config TEGRA_EMC_TO_DDR_CLOCK
 	int "EMC to DDR clocks ratio"
 	default "2" if ARCH_TEGRA_2x_SOC
@@ -376,6 +443,11 @@ config TEGRA_DYNAMIC_PWRDET
 	  only during power transitions, otherwise, the cells are active
 	  always
 
+config ACER_VIBRATOR
+	bool "Acer Vibrator"
+	default n
+	select ANDROID_TIMED_GPIO
+
 config TEGRA_EDP_EXACT_FREQ
 	bool "Use maximum possible cpu frequency when EDP capping"
 	depends on TEGRA_EDP_LIMITS
@@ -384,4 +456,49 @@ config TEGRA_EDP_EXACT_FREQ
 	  When enabled the cpu will run at the exact frequency
 	  specified in the EDP table when EDP capping is applied; when
 	  disabled the next lower cpufreq frequency will be used.
+
+config TEGRA_USB_MODEM_POWER
+	bool "Enable tegra usb modem power management"
+	default n
+	help
+	  This option enables support for out-of_band remote wakeup, selective
+	  suspend and system suspend/resume.
+
+config TEGRA_BB_XMM_POWER
+	bool "Enable power driver for XMM modem"
+	default n
+	help
+	  Enables power driver which controls gpio signals to XMM modem.
+
+config TEGRA_BB_XMM_POWER2
+	tristate "Enable power driver for XMM modem (flashless)"
+	default n
+	help
+	  Enables power driver which controls gpio signals to XMM modem
+	  (in flashless configuration).  User-mode application must
+	  insert this LKM to initiate 2nd USB enumeration power sequence
+	  - after modem software has been downloaded to flashless device.
+
+config TEGRA_THERMAL_SYSFS
+	bool "Enable Thermal driver to use Thermal Sysfs infrastructure"
+	depends on THERMAL
+	default y
+
+config TEGRA_PLLM_RESTRICTED
+	bool "Restrict PLLM usage as module clock source"
+	depends on !ARCH_TEGRA_2x_SOC
+	default n
+	help
+	  When enabled, PLLM usage may be restricted to modules with dividers
+	  capable of dividing maximum PLLM frequency at minimum voltage. When
+	  disabled, PLLM is used as a clock source with no restrictions (which
+	  may effectively increase lower limit for core voltage).
+
+config TEGRA_WDT_RECOVERY
+	bool "Enable suspend/resume watchdog recovery mechanism"
+	default n
+	help
+	  Enables watchdog recovery mechanism to protect against
+	  suspend/resume hangs.
 endif
+

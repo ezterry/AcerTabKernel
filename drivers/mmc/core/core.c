@@ -109,6 +109,11 @@ void mmc_request_done(struct mmc_host *host, struct mmc_request *mrq)
 
 		cmd->retries--;
 		cmd->error = 0;
+		if (mrq->data) {
+			mrq->data->error = 0;
+			if (mrq->stop)
+				mrq->stop->error = 0;
+		}
 		host->ops->request(host, mrq);
 	} else {
 		led_trigger_event(host->led, LED_OFF);
@@ -226,6 +231,110 @@ void mmc_wait_for_req(struct mmc_host *host, struct mmc_request *mrq)
 }
 
 EXPORT_SYMBOL(mmc_wait_for_req);
+
+/**
+ *	mmc_bkops_start - Issue start for mmc background ops
+ *	@card: the MMC card associated with bkops
+ *	@is_synchronous: is the backops synchronous
+ *
+ *	Issued background ops without the busy wait.
+ */
+int mmc_bkops_start(struct mmc_card *card, bool is_synchronous)
+{
+	int err;
+	unsigned long flags;
+
+	BUG_ON(!card);
+
+	if (!card->ext_csd.bk_ops_en || mmc_card_doing_bkops(card))
+		return 1;
+
+	mmc_claim_host(card->host);
+	err = mmc_send_bk_ops_cmd(card, is_synchronous);
+	if (err)
+		pr_err("%s: abort bk ops (%d error)\n",
+			mmc_hostname(card->host), err);
+
+	/*
+	 * Incase of asynchronous backops, set card state
+	 * to doing bk ops to ensure that HPI is issued before
+	 * handling any new request in the queue.
+	 */
+		spin_lock_irqsave(&card->host->lock, flags);
+		mmc_card_clr_need_bkops(card);
+		if (!is_synchronous)
+			mmc_card_set_doing_bkops(card);
+		spin_unlock_irqrestore(&card->host->lock, flags);
+
+	mmc_release_host(card->host);
+
+	return err;
+}
+EXPORT_SYMBOL(mmc_bkops_start);
+
+/**
+ *	mmc_interrupt_hpi - Issue for High priority Interrupt
+ *	@card: the MMC card associated with the HPI transfer
+ *
+ *	Issued High Priority Interrupt, and check for card status
+ *	util out-of prg-state.
+ */
+int mmc_interrupt_hpi(struct mmc_card *card)
+{
+	int err;
+	u32 status;
+	unsigned long flags;
+
+	BUG_ON(!card);
+
+	if (!mmc_card_mmc(card))
+		return 1;
+
+	if (!card->ext_csd.hpi_en) {
+		pr_info("%s: HPI enable bit unset\n", mmc_hostname(card->host));
+		return 1;
+	}
+
+	mmc_claim_host(card->host);
+	err = mmc_send_status(card, &status);
+	if (err) {
+		pr_err("%s: Get card status fail\n", mmc_hostname(card->host));
+		goto out;
+	}
+
+	/*
+	 * If the card status is in PRG-state, we can send the HPI command.
+	 */
+	if (R1_CURRENT_STATE(status) == R1_STATE_PRG) {
+		do {
+			/*
+			 * We don't know when the HPI command will finish
+			 * processing, so we need to resend HPI until out
+			 * of prg-state, and keep checking the card status
+			 * with SEND_STATUS.  If a timeout error occurs when
+			 * sending the HPI command, we are already out of
+			 * prg-state.
+			 */
+			err = mmc_send_hpi_cmd(card, &status);
+			if (err)
+				pr_debug("%s: abort HPI (%d error)\n",
+					 mmc_hostname(card->host), err);
+
+			err = mmc_send_status(card, &status);
+			if (err)
+				break;
+		} while (R1_CURRENT_STATE(status) == R1_STATE_PRG);
+	} else
+		pr_debug("%s: Left prg-state\n", mmc_hostname(card->host));
+
+out:
+	spin_lock_irqsave(&card->host->lock, flags);
+	mmc_card_clr_doing_bkops(card);
+	spin_unlock_irqrestore(&card->host->lock, flags);
+	mmc_release_host(card->host);
+	return err;
+}
+EXPORT_SYMBOL(mmc_interrupt_hpi);
 
 /**
  *	mmc_wait_for_cmd - start a command and wait for completion
@@ -726,22 +835,12 @@ void mmc_set_bus_mode(struct mmc_host *host, unsigned int mode)
 }
 
 /*
- * Change data bus width and DDR mode of a host.
- */
-void mmc_set_bus_width_ddr(struct mmc_host *host, unsigned int width,
-			   unsigned int ddr)
-{
-	host->ios.bus_width = width;
-	host->ios.ddr = ddr;
-	mmc_set_ios(host);
-}
-
-/*
  * Change data bus width of a host.
  */
 void mmc_set_bus_width(struct mmc_host *host, unsigned int width)
 {
-	mmc_set_bus_width_ddr(host, width, MMC_SDR_MODE);
+	host->ios.bus_width = width;
+	mmc_set_ios(host);
 }
 
 /**
@@ -950,12 +1049,53 @@ u32 mmc_select_voltage(struct mmc_host *host, u32 ocr)
 	return ocr;
 }
 
+int mmc_set_signal_voltage(struct mmc_host *host, int signal_voltage)
+{
+	struct mmc_command cmd = {0};
+	int err = 0;
+
+	BUG_ON(!host);
+
+	/*
+	 * Send CMD11 only if the request is to switch the card to
+	 * 1.8V signalling.
+	 */
+	if (signal_voltage == MMC_SIGNAL_VOLTAGE_180) {
+		cmd.opcode = SD_SWITCH_VOLTAGE;
+		cmd.arg = 0;
+		cmd.flags = MMC_RSP_R1 | MMC_CMD_AC;
+
+		err = mmc_wait_for_cmd(host, &cmd, 0);
+		if (err)
+			return err;
+
+		if (!mmc_host_is_spi(host) && (cmd.resp[0] & R1_ERROR))
+			return -EIO;
+	}
+
+	host->ios.signal_voltage = signal_voltage;
+
+	if (host->ops->start_signal_voltage_switch)
+		err = host->ops->start_signal_voltage_switch(host, &host->ios);
+
+	return err;
+}
+
 /*
  * Select timing parameters for host.
  */
 void mmc_set_timing(struct mmc_host *host, unsigned int timing)
 {
 	host->ios.timing = timing;
+	mmc_set_ios(host);
+}
+
+/*
+ * Select appropriate driver type for host.
+ */
+void mmc_set_driver_type(struct mmc_host *host, unsigned int drv_type)
+{
+	host->ios.drv_type = drv_type;
 	mmc_set_ios(host);
 }
 
@@ -1773,6 +1913,10 @@ int mmc_suspend_host(struct mmc_host *host)
 	if (mmc_bus_needs_resume(host))
 		return 0;
 
+	if (mmc_card_mmc(host->card) && mmc_card_doing_bkops(host->card))
+		mmc_interrupt_hpi(host->card);
+	mmc_card_clr_need_bkops(host->card);
+
 	if (host->caps & MMC_CAP_DISABLE)
 		cancel_delayed_work(&host->disable);
 	cancel_delayed_work(&host->detect);
@@ -1844,7 +1988,9 @@ int mmc_resume_host(struct mmc_host *host)
 			printk(KERN_WARNING "%s: error %d during resume "
 					    "(card was removed?)\n",
 					    mmc_hostname(host), err);
+#if !(defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30))
 			err = 0;
+#endif
 		}
 	}
 	mmc_bus_put(host);
@@ -1902,8 +2048,19 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 		}
 		host->rescan_disable = 0;
 		spin_unlock_irqrestore(&host->lock, flags);
+		/*
+		* The Wi-Fi sdio card is not removeable when suspend.
+		*/
+#if defined(CONFIG_ARCH_ACER_T20)
+		if(strnicmp((char *)mmc_hostname(host), "mmc2", 4) != 0)
+			mmc_detect_change(host, 0);
+#else
+#if defined(CONFIG_ARCH_ACER_T30)
+		if(strnicmp((char *)mmc_hostname(host), "mmc1", 4) != 0)
+			mmc_detect_change(host, 0);
+#endif
 		mmc_detect_change(host, 0);
-
+#endif
 	}
 
 	return 0;

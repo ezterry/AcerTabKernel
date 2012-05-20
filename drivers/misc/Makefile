@@ -1,6 +1,7 @@
 #
 # Makefile for misc devices that really don't fit anywhere else.
 #
+GCOV_PROFILE_tegra-cryptodev.o := y
 
 obj-$(CONFIG_IBM_ASM)		+= ibmasm/
 obj-$(CONFIG_AD525X_DPOT)	+= ad525x_dpot.o
@@ -52,6 +53,10 @@ obj-$(CONFIG_APANIC)		+= apanic.o
 obj-$(CONFIG_SENSORS_AK8975)	+= akm8975.o
 obj-$(CONFIG_SENSORS_NCT1008)	+= nct1008.o
 obj-$(CONFIG_BCM4329_RFKILL)	+= bcm4329_rfkill.o
-obj-$(CONFIG_MPU_SENSORS_MPU3050)	+= mpu3050/
+obj-$(CONFIG_ARCH_ACER_T20)	+= mpu3050/inv_330/
+obj-$(CONFIG_ARCH_ACER_T30)	+= mpu3050/inv_403/
 obj-$(CONFIG_TEGRA_CRYPTO_DEV)	+= tegra-cryptodev.o
+obj-$(CONFIG_TEGRA_BB_SUPPORT)	+= tegra-baseband/
 obj-$(CONFIG_MAX1749_VIBRATOR)	+= max1749.o
+obj-$(CONFIG_STK2203_LIGHT_SENSOR)	+= stk2203.o
+obj-$(CONFIG_AL3000A_LIGHT_SENSOR)	+= al3000a.o

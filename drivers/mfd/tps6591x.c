@@ -60,6 +60,10 @@
 /* GPIO register base address */
 #define TPS6591X_GPIO_BASE_ADDR	0x60
 
+#if defined(CONFIG_ARCH_ACER_T30)
+#define TPS6591X_VMBCH_REG	0x6A
+#endif
+
 /* silicon version number */
 #define TPS6591X_VERNUM		0x80
 
@@ -288,10 +292,22 @@ int tps6591x_power_off(void)
 	struct device *dev = NULL;
 	int ret;
 
+	printk("%s\n", __func__);
+
 	if (!tps6591x_i2c_client)
 		return -EINVAL;
 
 	dev = &tps6591x_i2c_client->dev;
+
+#if defined(CONFIG_ARCH_ACER_T30)
+	/* Prevent rtc alarm after power off */
+	dev_info(&tps6591x_i2c_client->dev, "Disable RTC ALARM interrupt.\n");
+	ret = i2c_smbus_write_byte_data(tps6591x_i2c_client, TPS6591X_INT_MSK, 0xFF);
+	if (ret < 0) {
+		dev_err(&tps6591x_i2c_client->dev, "Mask RTC ALARM interrupt failed %d.\n", ret);
+		return -EIO;
+	}
+#endif
 
 	ret = tps6591x_set_bits(dev, TPS6591X_DEVCTRL, DEVCTRL_PWR_OFF_SEQ);
 	if (ret < 0)
@@ -519,6 +535,7 @@ static irqreturn_t tps6591x_irq(int irq, void *data)
 	struct tps6591x *tps6591x = data;
 	int ret = 0;
 	u8 tmp[3];
+	u8 int_ack;
 	u32 acks, mask = 0;
 	int i;
 
@@ -531,8 +548,10 @@ static irqreturn_t tps6591x_irq(int irq, void *data)
 			return IRQ_NONE;
 		}
 		if (tmp[i]) {
+			/* Ack only those interrupts which are enabled */
+			int_ack = tmp[i] & (~(tps6591x->mask_cache[i]));
 			ret = tps6591x_write(tps6591x->dev,
-					TPS6591X_INT_STS + 2*i,	tmp[i]);
+					TPS6591X_INT_STS + 2*i,	int_ack);
 			if (ret < 0) {
 				dev_err(tps6591x->dev,
 					"failed to write interrupt status\n");
@@ -805,6 +824,11 @@ static int __devinit tps6591x_i2c_probe(struct i2c_client *client,
 	}
 
 	dev_info(&client->dev, "VERNUM is %02x\n", ret);
+
+#if defined(CONFIG_ARCH_ACER_T30)
+	/* Diasble the auto device on threshold */
+	i2c_smbus_write_byte_data(client, TPS6591X_VMBCH_REG, 0x00);
+#endif
 
 	tps6591x = kzalloc(sizeof(struct tps6591x), GFP_KERNEL);
 	if (tps6591x == NULL)

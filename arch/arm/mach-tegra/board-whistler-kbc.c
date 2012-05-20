@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010 NVIDIA, Inc.
+ * Copyright (C) 2010-2011 NVIDIA, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -120,19 +120,15 @@ int __init whistler_kbc_init(void)
 	int i;
 
 	pr_info("KBC: whistler_kbc_init\n");
-
-	/* Setup the pin configuration information. */
-	for (i = 0; i < KBC_MAX_GPIO; i++) {
-		data->pin_cfg[i].num = 0;
-		data->pin_cfg[i].is_row = false;
-	}
-
-	for (i = 0; i < KBC_MAX_ROW; i++) {
+	for (i = 0; i < WHISTLER_ROW_COUNT; i++) {
 		data->pin_cfg[i].num = i;
 		data->pin_cfg[i].is_row = true;
+		data->pin_cfg[i].en = true;
 	}
-	for (i = 0; i < KBC_MAX_COL; i++)
-		data->pin_cfg[i + KBC_MAX_ROW].num = i;
+	for (i = 0; i < WHISTLER_COL_COUNT; i++) {
+		data->pin_cfg[i + KBC_PIN_GPIO_16].num = i;
+		data->pin_cfg[i + KBC_PIN_GPIO_16].en = true;
+	}
 
 	platform_device_register(&whistler_kbc_device);
 	return 0;

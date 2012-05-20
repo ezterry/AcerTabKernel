@@ -25,6 +25,18 @@ struct tegra_sdhci_platform_data {
 	int wp_gpio;
 	int power_gpio;
 	int is_8bit;
+	unsigned int tap_delay;
+#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
+	int cd_gpio_polarity;
+#endif
+#if defined(CONFIG_ARCH_ACER_T30)
+	bool is_voltage_switch_supported;
+	const char *vdd_rail_name;
+	const char *slot_rail_name;
+	int vdd_max_uv;
+	int vdd_min_uv;
+#endif
+	unsigned int max_clk_limit;
 	struct mmc_platform_data mmc_data;
 };
 

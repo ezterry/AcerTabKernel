@@ -24,6 +24,7 @@
 #include <mach/gpio.h>
 #include <mach/irqs.h>
 #include <linux/mfd/tps6591x.h>
+#include <linux/mfd/ricoh583.h>
 
 /* Processor Board  ID */
 #define BOARD_E1187   0x0B57
@@ -37,6 +38,8 @@
 #define BOARD_E1208   0x0C08
 #define BOARD_PM305   0x0305
 #define BOARD_PM311   0x030B
+#define BOARD_PMU_PM298   0x0262
+#define BOARD_PMU_PM299   0x0263
 
 /* SKU Information */
 #define SKU_DCDC_TPS62361_SUPPORT	0x1
@@ -47,16 +50,21 @@
 #define SKU_TOUCH_MASK			0xFF00
 #define SKU_TOUCH_2000			0x0B00
 
-#define SKU_MEMORY_TYPE_BIT		0x4
-#define SKU_MEMORY_TYPE_MASK		0x3
+#define SKU_MEMORY_TYPE_BIT		0x3
+#define SKU_MEMORY_TYPE_MASK		0x7
 /* If BOARD_PM269 */
 #define SKU_MEMORY_SAMSUNG_EC		0x0
-#define SKU_MEMORY_ELPIDA		0x1
-#define SKU_MEMORY_SAMSUNG_EB		0x2
+#define SKU_MEMORY_ELPIDA		0x2
+#define SKU_MEMORY_SAMSUNG_EB		0x4
+/* If BOARD_PM272 */
+#define SKU_MEMORY_1GB_1R_HYNIX		0x0
+#define SKU_MEMORY_2GB_2R_HYH9		0x2
 /* If other BOARD_ variants */
 #define SKU_MEMORY_CARDHU_1GB_1R	0x0
-#define SKU_MEMORY_CARDHU_2GB_2R	0x1
-#define SKU_MEMORY_CARDHU_2GB_1R	0x2
+#define SKU_MEMORY_CARDHU_2GB_2R	0x2
+#define SKU_MEMORY_CARDHU_2GB_1R_HYK0	0x4
+#define SKU_MEMORY_CARDHU_2GB_1R_HYH9	0x6
+#define SKU_MEMORY_CARDHU_2GB_1R_HYNIX	0x1
 #define MEMORY_TYPE(sku) (((sku) >> SKU_MEMORY_TYPE_BIT) & SKU_MEMORY_TYPE_MASK)
 
 /* Board Fab version */
@@ -65,7 +73,11 @@
 #define BOARD_FAB_A02			0x2
 #define BOARD_FAB_A03			0x3
 #define BOARD_FAB_A04			0x4
+#define BOARD_FAB_A05			0x5
 
+/* Display Board ID */
+#define BOARD_DISPLAY_PM313		0x030D
+#define BOARD_DISPLAY_E1247		0x0C2F
 
 /* External peripheral act as gpio */
 /* TPS6591x GPIOs */
@@ -80,6 +92,14 @@
 #define TPS6591X_GPIO_7		(TPS6591X_GPIO_BASE + TPS6591X_GPIO_GP7)
 #define TPS6591X_GPIO_8		(TPS6591X_GPIO_BASE + TPS6591X_GPIO_GP8)
 #define TPS6591X_GPIO_END	(TPS6591X_GPIO_BASE + TPS6591X_GPIO_NR)
+
+/* RICOH583 GPIO */
+#define RICOH583_GPIO_BASE	TEGRA_NR_GPIOS
+#define RICOH583_GPIO_END	(RICOH583_GPIO_BASE + 8)
+
+/* MAX77663 GPIO */
+#define MAX77663_GPIO_BASE	TEGRA_NR_GPIOS
+#define MAX77663_GPIO_END	(MAX77663_GPIO_BASE + MAX77663_GPIO_NR)
 
 /* PMU_TCA6416 GPIOs */
 #define PMU_TCA6416_GPIO_BASE	(TPS6591X_GPIO_END)
@@ -145,6 +165,7 @@
 #define CAM1_LDO_EN_GPIO			TEGRA_GPIO_PR6
 #define CAM2_LDO_EN_GPIO			TEGRA_GPIO_PR7
 #define CAM3_LDO_EN_GPIO			TEGRA_GPIO_PS0
+#define OV14810_RESETN_GPIO			TEGRA_GPIO_PBB0
 
 #define CAMERA_FLASH_SYNC_GPIO		TEGRA_GPIO_PBB3
 #define CAMERA_FLASH_MAX_TORCH_AMP	7
@@ -164,6 +185,15 @@
 /* TPS6591x IRQs */
 #define TPS6591X_IRQ_BASE	TEGRA_NR_IRQS
 #define TPS6591X_IRQ_END	(TPS6591X_IRQ_BASE + 18)
+#define DOCK_DETECT_GPIO TEGRA_GPIO_PU4
+
+/* RICOH583 IRQs */
+#define RICOH583_IRQ_BASE	TEGRA_NR_IRQS
+#define RICOH583_IRQ_END	(RICOH583_IRQ_BASE + RICOH583_NR_IRQS)
+
+/* MAX77663 IRQs */
+#define MAX77663_IRQ_BASE	TEGRA_NR_IRQS
+#define MAX77663_IRQ_END	(MAX77663_IRQ_BASE + MAX77663_IRQ_NR)
 
 int cardhu_charge_init(void);
 int cardhu_regulator_init(void);
@@ -181,7 +211,28 @@ int cardhu_emc_init(void);
 int cardhu_power_off_init(void);
 int cardhu_edp_init(void);
 int cardhu_pmon_init(void);
+int cardhu_pm298_gpio_switch_regulator_init(void);
+int cardhu_pm298_regulator_init(void);
+int cardhu_pm299_gpio_switch_regulator_init(void);
+int cardhu_pm299_regulator_init(void);
 void __init cardhu_tsensor_init(void);
+
+/* Invensense MPU Definitions */
+#define MPU_GYRO_NAME		"mpu3050"
+#define MPU_GYRO_IRQ_GPIO	TEGRA_GPIO_PX1
+#define MPU_GYRO_ADDR		0x68
+#define MPU_GYRO_BUS_NUM	2
+#define MPU_GYRO_ORIENTATION	{ 0, -1, 0, -1, 0, 0, 0, 0, -1 }
+#define MPU_ACCEL_NAME		"kxtf9"
+#define MPU_ACCEL_IRQ_GPIO	TEGRA_GPIO_PL1
+#define MPU_ACCEL_ADDR		0x0F
+#define MPU_ACCEL_BUS_NUM	2
+#define MPU_ACCEL_ORIENTATION	{ 0, -1, 0, -1, 0, 0, 0, 0, -1 }
+#define MPU_COMPASS_NAME	"ak8975"
+#define MPU_COMPASS_IRQ_GPIO	0
+#define MPU_COMPASS_ADDR	0x0C
+#define MPU_COMPASS_BUS_NUM	2
+#define MPU_COMPASS_ORIENTATION	{ 1, 0, 0, 0, 1, 0, 0, 0, 1 }
 
 /* Baseband GPIO addresses */
 #define BB_GPIO_BB_EN			TEGRA_GPIO_PR5
@@ -197,5 +248,7 @@ void __init cardhu_tsensor_init(void);
 #define XMM_GPIO_IPC_HSIC_SUS_REQ	BB_GPIO_SPI_SS
 #define XMM_GPIO_IPC_BB_WAKE		BB_GPIO_AWR
 #define XMM_GPIO_IPC_AP_WAKE		BB_GPIO_CWR
+
+#define TDIODE_OFFSET	(10000)	/* in millicelsius */
 
 #endif

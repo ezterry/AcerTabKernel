@@ -15,8 +15,11 @@ void blk_rq_bio_prep(struct request_queue *q, struct request *rq,
 			struct bio *bio);
 int blk_rq_append_bio(struct request_queue *q, struct request *rq,
 		      struct bio *bio);
+void blk_drain_queue(struct request_queue *q, bool drain_all);
 void blk_dequeue_request(struct request *rq);
 void __blk_queue_free_tags(struct request_queue *q);
+bool __blk_end_bidi_request(struct request *rq, int error,
+			    unsigned int nr_bytes, unsigned int bidi_bytes);
 
 void blk_rq_timed_out_timer(unsigned long data);
 void blk_delete_timer(struct request *);

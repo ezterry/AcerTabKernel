@@ -154,6 +154,10 @@
 #define PMC_BLINK_TIMER_DATA_OFF_SHIFT	16
 #define PMC_BLINK_TIMER_DATA_OFF_MASK	0xffff
 
+#define AP25_EMC_BRIDGE_RATE		380000000
+#define AP25_EMC_INTERMEDIATE_RATE	760000000
+#define AP25_EMC_SCALING_STEP		600000000
+
 static void __iomem *reg_clk_base = IO_ADDRESS(TEGRA_CLK_RESET_BASE);
 static void __iomem *reg_pmc_base = IO_ADDRESS(TEGRA_PMC_BASE);
 static void __iomem *misc_gp_hidrev_base = IO_ADDRESS(TEGRA_APB_MISC_BASE);
@@ -596,7 +600,7 @@ static int tegra2_bus_clk_set_rate(struct clk *c, unsigned long rate)
 
 	val = clk_readl(c->reg);
 	for (i = 1; i <= 4; i++) {
-		if (rate == parent_rate / i) {
+		if (rate >= parent_rate / i) {
 			val &= ~(BUS_CLK_DIV_MASK << c->reg_shift);
 			val |= (i - 1) << c->reg_shift;
 			clk_writel(val, c->reg);
@@ -1264,14 +1268,35 @@ static long tegra2_emc_clk_round_rate(struct clk *c, unsigned long rate)
 	if (new_rate < 0)
 		return c->max_rate;
 
-	BUG_ON(new_rate != tegra2_periph_clk_round_rate(c, new_rate));
-
 	return new_rate;
 }
 
 static int tegra2_emc_clk_set_rate(struct clk *c, unsigned long rate)
 {
 	int ret;
+	int divider;
+	struct clk *p = NULL;
+	unsigned long inp_rate;
+	unsigned long new_rate;
+	const struct clk_mux_sel *sel;
+
+	for (sel = c->inputs; sel->input != NULL; sel++) {
+		inp_rate = clk_get_rate(sel->input);
+
+		divider = clk_div71_get_divider(inp_rate, rate);
+		if (divider < 0)
+			return divider;
+
+		new_rate = DIV_ROUND_UP(inp_rate * 2, divider + 2);
+		if ((abs(rate - new_rate)) < 2000) {
+			p = sel->input;
+			break;
+		}
+	}
+
+	BUG_ON(!p);
+	BUG_ON(divider & 0x1);
+
 	/*
 	 * The Tegra2 memory controller has an interlock with the clock
 	 * block that allows memory shadowed registers to be updated,
@@ -1281,6 +1306,13 @@ static int tegra2_emc_clk_set_rate(struct clk *c, unsigned long rate)
 	ret = tegra_emc_set_rate(rate);
 	if (ret < 0)
 		return ret;
+
+	if (c->parent != p) {
+		BUG_ON(divider != 0);
+		ret = clk_set_parent_locked(c, p);
+		udelay(1);
+		return ret;
+	}
 
 	ret = tegra2_periph_clk_set_rate(c, rate);
 	udelay(1);
@@ -1398,7 +1430,7 @@ static void tegra2_cdev_clk_set_parent(struct clk *c)
 	int val;
 
 	/* Get pinmux setting for cdev1 and cdev2 from APB_MISC register */
-	if (!strcmp(c->name, "clk_dev2"))
+	if (!strcmp(c->name, "cdev2"))
 		pg = TEGRA_PINGROUP_CDEV2;
 
 	val = tegra_pinmux_get_func(pg);
@@ -1472,14 +1504,37 @@ static struct clk_ops tegra_cdev_clk_ops = {
 static int tegra2_clk_shared_bus_update(struct clk *bus)
 {
 	struct clk *c;
+	unsigned long old_rate;
 	unsigned long rate = bus->min_rate;
+	int sku_id = tegra_sku_id();
 
-	list_for_each_entry(c, &bus->shared_bus_list, u.shared_bus_user.node)
+	list_for_each_entry(c, &bus->shared_bus_list,
+			u.shared_bus_user.node) {
 		if (c->u.shared_bus_user.enabled)
 			rate = max(c->u.shared_bus_user.rate, rate);
+	}
 
-	if (rate == clk_get_rate_locked(bus))
+	old_rate = clk_get_rate_locked(bus);
+
+	if (rate == old_rate)
 		return 0;
+
+	/* WAR: For AP25 EMC scaling */
+	if ((sku_id == 0x17) && (bus->flags & PERIPH_EMC_ENB)) {
+		if (old_rate == AP25_EMC_SCALING_STEP &&
+			rate != AP25_EMC_INTERMEDIATE_RATE)
+			clk_set_rate_locked(bus, AP25_EMC_INTERMEDIATE_RATE);
+
+		if (((old_rate > AP25_EMC_BRIDGE_RATE) &&
+		    (rate < AP25_EMC_BRIDGE_RATE)) ||
+		    ((old_rate < AP25_EMC_BRIDGE_RATE) &&
+		    (rate > AP25_EMC_BRIDGE_RATE)))
+			clk_set_rate_locked(bus, AP25_EMC_BRIDGE_RATE);
+
+		if (rate == AP25_EMC_SCALING_STEP &&
+			old_rate != AP25_EMC_INTERMEDIATE_RATE)
+			clk_set_rate_locked(bus, AP25_EMC_INTERMEDIATE_RATE);
+	}
 
 	return clk_set_rate_locked(bus, rate);
 };
@@ -1503,7 +1558,6 @@ static void tegra_clk_shared_bus_init(struct clk *c)
 
 static int tegra_clk_shared_bus_set_rate(struct clk *c, unsigned long rate)
 {
-	unsigned long flags;
 	int ret;
 	long new_rate = rate;
 
@@ -1524,7 +1578,6 @@ static long tegra_clk_shared_bus_round_rate(struct clk *c, unsigned long rate)
 
 static int tegra_clk_shared_bus_enable(struct clk *c)
 {
-	unsigned long flags;
 	int ret;
 
 	c->u.shared_bus_user.enabled = true;
@@ -1537,7 +1590,6 @@ static int tegra_clk_shared_bus_enable(struct clk *c)
 
 static void tegra_clk_shared_bus_disable(struct clk *c)
 {
-	unsigned long flags;
 	int ret;
 
 	if (strcmp(c->name, "avp.sclk") == 0)
@@ -2325,6 +2377,8 @@ struct clk tegra_list_periph_clks[] = {
 	PERIPH_CLK("i2s1",	"tegra20-i2s.0",	NULL,	11,	0x100,	0x31E,	26000000,  mux_pllaout0_audio2x_pllp_clkm,	MUX | DIV_U71 | PERIPH_ON_APB),
 	PERIPH_CLK("i2s2",	"tegra20-i2s.1",	NULL,	18,	0x104,	0x31E,	26000000,  mux_pllaout0_audio2x_pllp_clkm,	MUX | DIV_U71 | PERIPH_ON_APB),
 	PERIPH_CLK("kfuse",	"kfuse-tegra",		NULL,	40,	0,	0x31E,  26000000,  mux_clk_m,			0),
+	PERIPH_CLK("fuse",	"fuse-tegra",		"fuse",	39,	0,	0x31E,	26000000,  mux_clk_m,			PERIPH_ON_APB),
+	PERIPH_CLK("fuse_burn",	"fuse-tegra",		"fuse_burn",	39,     0,	0x31E,	26000000,  mux_clk_m,		PERIPH_ON_APB),
 	PERIPH_CLK("spdif_out",	"tegra20-spdif",	"spdif_out",	10,	0x108,	0x31E,	100000000, mux_pllaout0_audio2x_pllp_clkm,	MUX | DIV_U71 | PERIPH_ON_APB),
 	PERIPH_CLK("spdif_in",	"tegra20-spdif",	"spdif_in",	10,	0x10c,	0x31E,	100000000, mux_pllp_pllc_pllm,		MUX | DIV_U71 | PERIPH_ON_APB),
 	PERIPH_CLK("pwm",	"pwm",			NULL,	17,	0x110,	0x71C,	432000000, mux_pllp_pllc_audio_clkm_clk32,	MUX | DIV_U71 | PERIPH_ON_APB),
@@ -2350,7 +2404,7 @@ struct clk tegra_list_periph_clks[] = {
 	/* FIXME: what is la? */
 	PERIPH_CLK("la",	"la",			NULL,	76,	0x1f8,	0x31E,	26000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71),
 	PERIPH_CLK("owr",	"tegra_w1",		NULL,	71,	0x1cc,	0x31E,	26000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71 | PERIPH_ON_APB),
-	PERIPH_CLK("nor",	"nor",			NULL,	42,	0x1d0,	0x31E,	92000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71), /* requires min voltage */
+	PERIPH_CLK("nor",	"tegra-nor",		NULL,	42,	0x1d0,	0x31E,	92000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71), /* requires min voltage */
 	PERIPH_CLK("mipi",	"mipi",			NULL,	50,	0x174,	0x31E,	60000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71 | PERIPH_ON_APB), /* scales with voltage */
 	PERIPH_CLK("i2c1",	"tegra-i2c.0",		NULL,	12,	0x124,	0x31E,	26000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U16 | PERIPH_ON_APB),
 	PERIPH_CLK("i2c2",	"tegra-i2c.1",		NULL,	54,	0x198,	0x31E,	26000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U16 | PERIPH_ON_APB),
@@ -2377,7 +2431,7 @@ struct clk tegra_list_periph_clks[] = {
 	PERIPH_CLK("usbd",	"fsl-tegra-udc",	NULL,	22,	0,	0x31E,	480000000, mux_clk_m,			0), /* requires min voltage */
 	PERIPH_CLK("usb2",	"tegra-ehci.1",		NULL,	58,	0,	0x31E,	480000000, mux_clk_m,			0), /* requires min voltage */
 	PERIPH_CLK("usb3",	"tegra-ehci.2",		NULL,	59,	0,	0x31E,	480000000, mux_clk_m,			0), /* requires min voltage */
-	PERIPH_CLK("dsi",	"dsi",			NULL,	48,	0,	0x31E,	500000000, mux_plld_out0,		0), /* scales with voltage */
+	PERIPH_CLK("dsia",	"tegradc.0",		"dsia",	48,	0,	0x31E,	500000000, mux_plld_out0,		0), /* scales with voltage */
 	PERIPH_CLK("csi",	"tegra_camera",		"csi",	52,	0,	0x31E,	72000000,  mux_pllp_out3,		0),
 	PERIPH_CLK("isp",	"tegra_camera",		"isp",	23,	0,	0x31E,	150000000, mux_clk_m,			0), /* same frequency as VI */
 	PERIPH_CLK("csus",	"tegra_camera",		"csus",	92,	0,	0x31E,	150000000, mux_clk_m,			PERIPH_NO_RESET),
@@ -2433,8 +2487,7 @@ struct clk_duplicate tegra_clk_duplicates[] = {
 	CLK_DUPLICATE("usbd", "tegra-otg", NULL),
 	CLK_DUPLICATE("hdmi", "tegradc.0", "hdmi"),
 	CLK_DUPLICATE("hdmi", "tegradc.1", "hdmi"),
-	CLK_DUPLICATE("dsi", "tegradc.0", "dsi"),
-	CLK_DUPLICATE("dsi", "tegradc.1", "dsi"),
+	CLK_DUPLICATE("dsia", "tegradc.1", "dsia"),
 	CLK_DUPLICATE("pwm", "tegra_pwm.0", NULL),
 	CLK_DUPLICATE("pwm", "tegra_pwm.1", NULL),
 	CLK_DUPLICATE("pwm", "tegra_pwm.2", NULL),
@@ -2527,6 +2580,12 @@ static struct tegra_sku_rate_limit sku_limits[] =
 	RATE_LIMIT("pclk",	150000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 	RATE_LIMIT("vde",	300000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 	RATE_LIMIT("3d",	400000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
+
+	RATE_LIMIT("uarta",	800000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
+	RATE_LIMIT("uartb",	800000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
+	RATE_LIMIT("uartc",	800000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
+	RATE_LIMIT("uartd",	800000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
+	RATE_LIMIT("uarte",	800000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 };
 
 static void tegra2_init_sku_limits(void)

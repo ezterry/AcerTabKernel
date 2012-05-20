@@ -34,29 +34,93 @@
 #include <linux/i2c.h>
 #include <linux/delay.h>
 #include <linux/i2c/pca954x.h>
+#include <linux/nct1008.h>
 #include <linux/err.h>
 #include <linux/mpu.h>
-#include <linux/nct1008.h>
+#include <linux/platform_data/ina230.h>
 #include <linux/regulator/consumer.h>
+#include <linux/slab.h>
 #include <mach/gpio.h>
 #include <media/ar0832_main.h>
 #include <media/tps61050.h>
 #include <media/ov9726.h>
 #include <mach/edp.h>
+#include <mach/thermal.h>
 #include "cpu-tegra.h"
 #include "gpio-names.h"
 #include "board-enterprise.h"
 #include "board.h"
 
+#ifndef CONFIG_TEGRA_INTERNAL_TSENSOR_EDP_SUPPORT
+static int nct_get_temp(void *_data, long *temp)
+{
+	struct nct1008_data *data = _data;
+	return nct1008_thermal_get_temp(data, temp);
+}
+
+static int nct_get_temp_low(void *_data, long *temp)
+{
+	struct nct1008_data *data = _data;
+	return nct1008_thermal_get_temp_low(data, temp);
+}
+
+static int nct_set_limits(void *_data,
+			long lo_limit_milli,
+			long hi_limit_milli)
+{
+	struct nct1008_data *data = _data;
+	return nct1008_thermal_set_limits(data,
+					lo_limit_milli,
+					hi_limit_milli);
+}
+
+static int nct_set_alert(void *_data,
+				void (*alert_func)(void *),
+				void *alert_data)
+{
+	struct nct1008_data *data = _data;
+	return nct1008_thermal_set_alert(data, alert_func, alert_data);
+}
+
+static int nct_set_shutdown_temp(void *_data, long shutdown_temp)
+{
+	struct nct1008_data *data = _data;
+	return nct1008_thermal_set_shutdown_temp(data,
+						shutdown_temp);
+}
+
+static void nct1008_probe_callback(struct nct1008_data *data)
+{
+	struct tegra_thermal_device *thermal_device;
+
+	thermal_device = kzalloc(sizeof(struct tegra_thermal_device),
+					GFP_KERNEL);
+	if (!thermal_device) {
+		pr_err("unable to allocate thermal device\n");
+		return;
+	}
+
+	thermal_device->name = "nct1008";
+	thermal_device->data = data;
+	thermal_device->offset = TDIODE_OFFSET;
+	thermal_device->get_temp = nct_get_temp;
+	thermal_device->get_temp_low = nct_get_temp_low;
+	thermal_device->set_limits = nct_set_limits;
+	thermal_device->set_alert = nct_set_alert;
+	thermal_device->set_shutdown_temp = nct_set_shutdown_temp;
+
+	tegra_thermal_set_device(thermal_device);
+}
+#endif
+
 static struct nct1008_platform_data enterprise_nct1008_pdata = {
 	.supported_hwrev = true,
 	.ext_range = true,
 	.conv_rate = 0x08,
-	.hysteresis = 5,
-	.shutdown_ext_limit = 90,
-	.shutdown_local_limit = 90,
-	.throttling_ext_limit = 75,
-	.alarm_fn = tegra_throttling_enable,
+	.offset = 8, /* 4 * 2C. Bug 844025 - 1C for device accuracies */
+#ifndef CONFIG_TEGRA_INTERNAL_TSENSOR_EDP_SUPPORT
+	.probe_callback = nct1008_probe_callback,
+#endif
 };
 
 static struct i2c_board_info enterprise_i2c4_nct1008_board_info[] = {
@@ -70,13 +134,6 @@ static struct i2c_board_info enterprise_i2c4_nct1008_board_info[] = {
 static void enterprise_nct1008_init(void)
 {
 	int ret;
-	struct nct1008_platform_data *pdata;
-#ifdef CONFIG_TEGRA_EDP_LIMITS
-	const struct tegra_edp_limits *z;
-	int zones_sz;
-	int i;
-	bool throttle_ok = false;
-#endif
 
 	tegra_gpio_enable(TEGRA_GPIO_PH7);
 	ret = gpio_request(TEGRA_GPIO_PH7, "temp_alert");
@@ -92,69 +149,96 @@ static void enterprise_nct1008_init(void)
 		return;
 	}
 
-	/* Temperature guardband AP30S DSC: bug 844025 */
-	pdata = enterprise_i2c4_nct1008_board_info[0].platform_data;
-	pdata->offset = 33; /* 4 * 8.25C */
-
 	i2c_register_board_info(4, enterprise_i2c4_nct1008_board_info,
 				ARRAY_SIZE(enterprise_i2c4_nct1008_board_info));
-#ifdef CONFIG_TEGRA_EDP_LIMITS
-	tegra_get_cpu_edp_limits(&z, &zones_sz);
-	zones_sz = min(zones_sz, MAX_ZONES);
-	for (i = 0; i < zones_sz; i++) {
-		enterprise_nct1008_pdata.thermal_zones[i] = z[i].temperature;
-		if (enterprise_nct1008_pdata.thermal_zones[i] ==
-		    enterprise_nct1008_pdata.throttling_ext_limit) {
-			throttle_ok = true;
-		}
-	}
-
-	if (throttle_ok != true)
-		pr_warn("%s: WARNING! Throttling limit %dC would be inaccurate"
-			" as it is NOT one of the EDP points\n",
-			__func__, enterprise_nct1008_pdata.throttling_ext_limit);
-	else
-		pr_info("%s: Throttling limit %dC OK\n",
-			__func__, enterprise_nct1008_pdata.throttling_ext_limit);
-
-	enterprise_nct1008_pdata.thermal_zones_sz = zones_sz;
-#endif
 }
 
-#define SENSOR_MPU_NAME "mpu3050"
-static struct mpu3050_platform_data mpu3050_data = {
-	.int_config  = 0x10,
-	/* Orientation matrix for MPU on enterprise */
-	.orientation = { -1, 0, 0, 0, -1, 0, 0, 0, 1 },
-	.level_shifter = 0,
-
-	.accel = {
-		.get_slave_descr = get_accel_slave_descr,
-		.adapt_num   = 0,
-		.bus         = EXT_SLAVE_BUS_SECONDARY,
-		.address     = 0x0F,
-		/* Orientation matrix for Kionix on enterprise */
-		.orientation = { 0, 1, 0, -1, 0, 0, 0, 0, 1 },
-
-	},
-
-	.compass = {
-		.get_slave_descr = get_compass_slave_descr,
-		.adapt_num   = 0,
-		.bus         = EXT_SLAVE_BUS_PRIMARY,
-		.address     = 0x0C,
-		/* Orientation matrix for AKM on enterprise */
-		.orientation = { 0, 1, 0, -1, 0, 0, 0, 0, 1 },
-	},
+static struct mpu_platform_data mpu3050_data = {
+	.int_config	= 0x10,
+	.level_shifter	= 0,
+	.orientation	= MPU_GYRO_ORIENTATION,	/* Located in board_[platformname].h	*/
 };
 
-static struct i2c_board_info __initdata mpu3050_i2c0_boardinfo[] = {
+static struct ext_slave_platform_data mpu3050_accel_data = {
+	.address	= MPU_ACCEL_ADDR,
+	.irq		= 0,
+	.adapt_num	= MPU_ACCEL_BUS_NUM,
+	.bus		= EXT_SLAVE_BUS_SECONDARY,
+	.orientation	= MPU_ACCEL_ORIENTATION,	/* Located in board_[platformname].h	*/
+};
+
+static struct ext_slave_platform_data mpu_compass_data = {
+	.address	= MPU_COMPASS_ADDR,
+	.irq		= 0,
+	.adapt_num	= MPU_COMPASS_BUS_NUM,
+	.bus		= EXT_SLAVE_BUS_PRIMARY,
+	.orientation	= MPU_COMPASS_ORIENTATION,	/* Located in board_[platformname].h	*/
+};
+
+static struct i2c_board_info __initdata inv_mpu_i2c2_board_info[] = {
 	{
-		I2C_BOARD_INFO(SENSOR_MPU_NAME, 0x68),
-		.irq = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PH4),
+		I2C_BOARD_INFO(MPU_GYRO_NAME, MPU_GYRO_ADDR),
+		.irq = TEGRA_GPIO_TO_IRQ(MPU_GYRO_IRQ_GPIO),
 		.platform_data = &mpu3050_data,
 	},
+	{
+		I2C_BOARD_INFO(MPU_ACCEL_NAME, MPU_ACCEL_ADDR),
+#if	MPU_ACCEL_IRQ_GPIO
+		.irq = TEGRA_GPIO_TO_IRQ(MPU_ACCEL_IRQ_GPIO),
+#endif
+		.platform_data = &mpu3050_accel_data,
+	},
+	{
+		I2C_BOARD_INFO(MPU_COMPASS_NAME, MPU_COMPASS_ADDR),
+#if	MPU_COMPASS_IRQ_GPIO
+		.irq = TEGRA_GPIO_TO_IRQ(MPU_COMPASS_IRQ_GPIO),
+#endif
+		.platform_data = &mpu_compass_data,
+	},
 };
+
+static void mpuirq_init(void)
+{
+	int ret = 0;
+
+	pr_info("*** MPU START *** mpuirq_init...\n");
+
+#if	MPU_ACCEL_IRQ_GPIO
+	/* ACCEL-IRQ assignment */
+	tegra_gpio_enable(MPU_ACCEL_IRQ_GPIO);
+	ret = gpio_request(MPU_ACCEL_IRQ_GPIO, MPU_ACCEL_NAME);
+	if (ret < 0) {
+		pr_err("%s: gpio_request failed %d\n", __func__, ret);
+		return;
+	}
+
+	ret = gpio_direction_input(MPU_ACCEL_IRQ_GPIO);
+	if (ret < 0) {
+		pr_err("%s: gpio_direction_input failed %d\n", __func__, ret);
+		gpio_free(MPU_ACCEL_IRQ_GPIO);
+		return;
+	}
+#endif
+
+	/* MPU-IRQ assignment */
+	tegra_gpio_enable(MPU_GYRO_IRQ_GPIO);
+	ret = gpio_request(MPU_GYRO_IRQ_GPIO, MPU_GYRO_NAME);
+	if (ret < 0) {
+		pr_err("%s: gpio_request failed %d\n", __func__, ret);
+		return;
+	}
+
+	ret = gpio_direction_input(MPU_GYRO_IRQ_GPIO);
+	if (ret < 0) {
+		pr_err("%s: gpio_direction_input failed %d\n", __func__, ret);
+		gpio_free(MPU_GYRO_IRQ_GPIO);
+		return;
+	}
+	pr_info("*** MPU END *** mpuirq_init...\n");
+
+	i2c_register_board_info(MPU_GYRO_BUS_NUM, inv_mpu_i2c2_board_info,
+		ARRAY_SIZE(inv_mpu_i2c2_board_info));
+}
 
 static inline void enterprise_msleep(u32 t)
 {
@@ -164,28 +248,6 @@ static inline void enterprise_msleep(u32 t)
 	Please read Documentation/timers/timers-howto.txt.
 	*/
 	usleep_range(t*1000, t*1000 + 500);
-}
-
-static void enterprise_mpuirq_init(void)
-{
-	int ret = 0;
-
-	tegra_gpio_enable(TEGRA_GPIO_PH4);
-	ret = gpio_request(TEGRA_GPIO_PH4, SENSOR_MPU_NAME);
-	if (ret < 0) {
-		pr_err("%s: gpio_request failed %d\n", __func__, ret);
-		return;
-	}
-
-	ret = gpio_direction_input(TEGRA_GPIO_PH4);
-	if (ret < 0) {
-		pr_err("%s: gpio_direction_input failed %d\n", __func__, ret);
-		gpio_free(TEGRA_GPIO_PH4);
-		return;
-	}
-
-	i2c_register_board_info(0, mpu3050_i2c0_boardinfo,
-				ARRAY_SIZE(mpu3050_i2c0_boardinfo));
 }
 
 static struct i2c_board_info enterprise_i2c0_isl_board_info[] = {
@@ -383,50 +445,15 @@ struct ov9726_platform_data enterprise_ov9726_data = {
 	.pwdn_low_active = false,
 };
 
-static struct tps61050_pin_state enterprise_tps61050_pinstate = {
+static struct nvc_torch_pin_state enterprise_tps61050_pinstate = {
 	.mask		= 0x0008, /*VGP3*/
 	.values		= 0x0008,
 };
 
-/* I2C bus becomes active when vdd_1v8_cam is enabled */
-static int enterprise_tps61050_pm(int pwr)
-{
-	static struct regulator *enterprise_flash_reg = NULL;
-	int ret = 0;
-
-	pr_info("%s: ++%d\n", __func__, pwr);
-	switch (pwr) {
-	case TPS61050_PWR_OFF:
-		if (enterprise_flash_reg)
-			regulator_disable(enterprise_flash_reg);
-		break;
-	case TPS61050_PWR_STDBY:
-	case TPS61050_PWR_COMM:
-	case TPS61050_PWR_ON:
-		if (!enterprise_flash_reg) {
-			enterprise_flash_reg = regulator_get(NULL, "vdd_1v8_cam");
-			if (IS_ERR_OR_NULL(enterprise_flash_reg)) {
-				pr_err("%s: failed to get flash pwr\n", __func__);
-				return PTR_ERR(enterprise_flash_reg);
-			}
-		}
-		ret = regulator_enable(enterprise_flash_reg);
-		if (ret) {
-			pr_err("%s: failed to enable flash pwr\n", __func__);
-			goto fail_regulator_flash_reg;
-		}
-		enterprise_msleep(1);
-		break;
-	default:
-		ret = -1;
-	}
-	return ret;
-
-fail_regulator_flash_reg:
-	regulator_put(enterprise_flash_reg);
-	enterprise_flash_reg = NULL;
-	return ret;
-}
+static struct tps61050_platform_data enterprise_tps61050_pdata = {
+	.dev_name	= "torch",
+	.pinstate	= &enterprise_tps61050_pinstate,
+};
 
 
 struct enterprise_cam_gpio {
@@ -476,19 +503,6 @@ static struct ar0832_platform_data enterprise_ar0832_le_data = {
 	.id = "left",
 };
 
-static struct tps61050_platform_data enterprise_tps61050_data = {
-	.cfg		= 0,
-	.num		= 1,
-	.max_amp_torch	= CAM_FLASH_MAX_TORCH_AMP,
-	.max_amp_flash	= CAM_FLASH_MAX_FLASH_AMP,
-	.pinstate	= &enterprise_tps61050_pinstate,
-	.init		= NULL,
-	.exit		= NULL,
-	.pm		= &enterprise_tps61050_pm,
-	.gpio_envm	= NULL,
-	.gpio_sync	= NULL,
-};
-
 static const struct i2c_board_info enterprise_i2c2_boardinfo[] = {
 	{
 		I2C_BOARD_INFO("pca9546", 0x70),
@@ -496,7 +510,7 @@ static const struct i2c_board_info enterprise_i2c2_boardinfo[] = {
 	},
 	{
 		I2C_BOARD_INFO("tps61050", 0x33),
-		.platform_data = &enterprise_tps61050_data,
+		.platform_data = &enterprise_tps61050_pdata,
 	},
 	{
 		I2C_BOARD_INFO("ov9726", OV9726_I2C_ADDR >> 1),
@@ -523,7 +537,7 @@ static struct i2c_board_info ar0832_i2c2_boardinfo[] = {
 	},
 	{
 		I2C_BOARD_INFO("tps61050", 0x33),
-		.platform_data = &enterprise_tps61050_data,
+		.platform_data = &enterprise_tps61050_pdata,
 	},
 	{
 		I2C_BOARD_INFO("ov9726", OV9726_I2C_ADDR >> 1),
@@ -550,6 +564,8 @@ static int enterprise_cam_init(void)
 	int ret;
 	int i;
 	struct board_info bi;
+	struct board_info cam_bi;
+	bool i2c_mux = false;
 
 	pr_info("%s:++\n", __func__);
 	memset(ent_vicsi_pwr, 0, sizeof(ent_vicsi_pwr));
@@ -568,11 +584,24 @@ static int enterprise_cam_init(void)
 	}
 
 	tegra_get_board_info(&bi);
+	tegra_get_camera_board_info(&cam_bi);
 
-	if (bi.fab == BOARD_FAB_A01)
+	if (bi.board_id == BOARD_E1205) {
+		if (bi.fab == BOARD_FAB_A00 || bi.fab == BOARD_FAB_A01)
+			i2c_mux = false;
+		else if (bi.fab == BOARD_FAB_A02)
+			i2c_mux = true;
+	} else if (bi.board_id == BOARD_E1197) {
+		if (cam_bi.fab == BOARD_FAB_A00)
+			i2c_mux = false;
+		else if (cam_bi.fab == BOARD_FAB_A01)
+			i2c_mux = true;
+	}
+
+	if (!i2c_mux)
 		i2c_register_board_info(2, ar0832_i2c2_boardinfo,
 			ARRAY_SIZE(ar0832_i2c2_boardinfo));
-	else if (bi.fab == BOARD_FAB_A02) {
+	else {
 		i2c_register_board_info(2, enterprise_i2c2_boardinfo,
 			ARRAY_SIZE(enterprise_i2c2_boardinfo));
 		/*
@@ -584,7 +613,6 @@ static int enterprise_cam_init(void)
 		i2c_register_board_info(PCA954x_I2C_BUS1, enterprise_i2c7_boardinfo,
 			ARRAY_SIZE(enterprise_i2c7_boardinfo));
 	}
-
 	return 0;
 
 fail_free_gpio:
@@ -594,13 +622,41 @@ fail_free_gpio:
 	return ret;
 }
 
+#define ENTERPRISE_INA230_ENABLED 0
+
+#if ENTERPRISE_INA230_ENABLED
+static struct ina230_platform_data ina230_platform = {
+	.rail_name = "VDD_AC_BAT",
+	.current_threshold = TEGRA_CUR_MON_THRESHOLD,
+	.resistor = TEGRA_CUR_MON_RESISTOR,
+	.min_cores_online = TEGRA_CUR_MON_MIN_CORES,
+};
+
+static struct i2c_board_info enterprise_i2c0_ina230_info[] = {
+	{
+		I2C_BOARD_INFO("ina230", 0x42),
+		.platform_data = &ina230_platform,
+		.irq = -1,
+	},
+};
+
+static int __init enterprise_ina230_init(void)
+{
+	return i2c_register_board_info(0, enterprise_i2c0_ina230_info,
+				       ARRAY_SIZE(enterprise_i2c0_ina230_info));
+}
+#endif
+
 int __init enterprise_sensors_init(void)
 {
 	int ret;
 
 	enterprise_isl_init();
 	enterprise_nct1008_init();
-	enterprise_mpuirq_init();
+	mpuirq_init();
+#if ENTERPRISE_INA230_ENABLED
+	enterprise_ina230_init();
+#endif
 	ret = enterprise_cam_init();
 
 	return ret;

@@ -80,16 +80,16 @@ static struct dvfs_rail tegra2_dvfs_rail_vdd_aon = {
 #endif
 };
 
-/* vdd_core and vdd_aon must be 50 mV higher than vdd_cpu */
+/* vdd_core and vdd_aon must be 120 mV higher than vdd_cpu */
 static int tegra2_dvfs_rel_vdd_cpu_vdd_core(struct dvfs_rail *vdd_cpu,
 	struct dvfs_rail *vdd_core)
 {
 	if (vdd_cpu->new_millivolts > vdd_cpu->millivolts &&
-	    vdd_core->new_millivolts < vdd_cpu->new_millivolts + 50)
-		return vdd_cpu->new_millivolts + 50;
+	    vdd_core->new_millivolts < vdd_cpu->new_millivolts + 120)
+		return vdd_cpu->new_millivolts + 120;
 
-	if (vdd_core->new_millivolts < vdd_cpu->millivolts + 50)
-		return vdd_cpu->millivolts + 50;
+	if (vdd_core->new_millivolts < vdd_cpu->millivolts + 120)
+		return vdd_cpu->millivolts + 120;
 
 	return vdd_core->new_millivolts;
 }
@@ -105,13 +105,13 @@ static int tegra2_dvfs_rel_vdd_core_vdd_aon(struct dvfs_rail *vdd_core,
 
 static struct dvfs_relationship tegra2_dvfs_relationships[] = {
 	{
-		/* vdd_core must be 50 mV higher than vdd_cpu */
+		/* vdd_core must be 120 mV higher than vdd_cpu */
 		.from = &tegra2_dvfs_rail_vdd_cpu,
 		.to = &tegra2_dvfs_rail_vdd_core,
 		.solve = tegra2_dvfs_rel_vdd_cpu_vdd_core,
 	},
 	{
-		/* vdd_aon must be 50 mV higher than vdd_cpu */
+		/* vdd_aon must be 120 mV higher than vdd_cpu */
 		.from = &tegra2_dvfs_rail_vdd_cpu,
 		.to = &tegra2_dvfs_rail_vdd_aon,
 		.solve = tegra2_dvfs_rel_vdd_cpu_vdd_core,
@@ -191,9 +191,9 @@ static struct dvfs dvfs_init[] = {
 	CORE_DVFS("nor",     -1, 1, KHZ, 0,      92000,  92000,  92000,  92000,  92000,  92000),
 	CORE_DVFS("ide",     -1, 1, KHZ, 0,      0,      100000, 100000, 100000, 100000, 100000),
 	CORE_DVFS("mipi",    -1, 1, KHZ, 0,      40000,  40000,  40000,  40000,  60000,  60000),
-	CORE_DVFS("usbd",    -1, 1, KHZ, 0,      0,      480000, 480000, 480000, 480000, 480000),
+	CORE_DVFS("usbd",    -1, 1, KHZ, 400000, 400000, 400000, 480000, 480000, 480000, 480000),
 	CORE_DVFS("usb2",    -1, 1, KHZ, 0,      0,      480000, 480000, 480000, 480000, 480000),
-	CORE_DVFS("usb3",    -1, 1, KHZ, 0,      0,      480000, 480000, 480000, 480000, 480000),
+	CORE_DVFS("usb3",    -1, 1, KHZ, 400000, 400000, 400000, 480000, 480000, 480000, 480000),
 	CORE_DVFS("pcie",    -1, 1, KHZ, 0,      0,      0,      250000, 250000, 250000, 250000),
 	CORE_DVFS("dsi",     -1, 1, KHZ, 100000, 100000, 100000, 500000, 500000, 500000, 500000),
 	CORE_DVFS("tvo",     -1, 1, KHZ, 0,      0,      0,      250000, 250000, 250000, 250000),

@@ -23,9 +23,26 @@
 #include "nvhost_channel.h"
 #include "dev.h"
 #include "nvhost_hwctx.h"
+#include "nvhost_job.h"
 #include <trace/events/nvhost.h>
+#include <linux/nvhost_ioctl.h>
+#include <linux/slab.h>
 
 #include <linux/platform_device.h>
+
+#define NVHOST_CHANNEL_LOW_PRIO_MAX_WAIT 50
+
+int nvhost_channel_submit(struct nvhost_job *job)
+{
+	/* Low priority submits wait until sync queue is empty. Ignores result
+	 * from nvhost_cdma_flush, as we submit either when push buffer is
+	 * empty or when we reach the timeout. */
+	if (job->priority < NVHOST_PRIORITY_MEDIUM)
+		(void)nvhost_cdma_flush(&job->ch->cdma,
+				NVHOST_CHANNEL_LOW_PRIO_MAX_WAIT);
+
+	return channel_op(job->ch).submit(job);
+}
 
 struct nvhost_channel *nvhost_getchannel(struct nvhost_channel *ch)
 {
@@ -82,13 +99,19 @@ void nvhost_putchannel(struct nvhost_channel *ch, struct nvhost_hwctx *ctx)
 	mutex_unlock(&ch->reflock);
 }
 
-void nvhost_channel_suspend(struct nvhost_channel *ch)
+int nvhost_channel_suspend(struct nvhost_channel *ch)
 {
+	int ret = 0;
+
 	mutex_lock(&ch->reflock);
-	BUG_ON(nvhost_module_powered(&ch->mod));
 	BUG_ON(!channel_cdma_op(ch).stop);
 
-	if (ch->refcount)
-		channel_cdma_op(ch).stop(&ch->cdma);
+	if (ch->refcount) {
+		ret = nvhost_module_suspend(&ch->mod, false);
+		if (!ret)
+			channel_cdma_op(ch).stop(&ch->cdma);
+	}
 	mutex_unlock(&ch->reflock);
+
+	return ret;
 }

@@ -39,27 +39,46 @@
 #include "devices.h"
 #include "gpio-names.h"
 
-/* Select panel to be used. */
+/* Select DSI panel to be used. */
 #define DSI_PANEL_219 0
 #define DSI_PANEL_218 1
 #define AVDD_LCD PMU_TCA6416_GPIO_PORT17
 #define DSI_PANEL_RESET 0
 
-#define pm269_lvds_shutdown	TEGRA_GPIO_PN6
-#define cardhu_lvds_shutdown	TEGRA_GPIO_PL2
-#define cardhu_bl_enb		TEGRA_GPIO_PH2
-#define cardhu_bl_pwm		TEGRA_GPIO_PH0
-#define cardhu_hdmi_hpd		TEGRA_GPIO_PN7
+/* Select LVDS panel resolution. 13X7 is default */
+#define PM313_LVDS_PANEL_19X12			1
+#define PM313_LVDS_PANEL_BPP			1 /* 0:24bpp, 1:18bpp */
+
+/* PM313 display board specific pins */
+#define pm313_R_FDE			TEGRA_GPIO_PW0
+#define pm313_R_FB			TEGRA_GPIO_PN4
+#define pm313_MODE0			TEGRA_GPIO_PZ4
+#define pm313_MODE1			TEGRA_GPIO_PW1
+#define pm313_BPP			TEGRA_GPIO_PN6 /* 0:24bpp, 1:18bpp */
+#define pm313_lvds_shutdown		TEGRA_GPIO_PH1
+
+/* E1247 reworked for pm269 pins */
+#define e1247_pm269_lvds_shutdown	TEGRA_GPIO_PN6
+
+/* E1247 cardhu default display board pins */
+#define cardhu_lvds_shutdown		TEGRA_GPIO_PL2
+
+/* common pins( backlight ) for all display boards */
+#define cardhu_bl_enb			TEGRA_GPIO_PH2
+#define cardhu_bl_pwm			TEGRA_GPIO_PH0
+#define cardhu_hdmi_hpd			TEGRA_GPIO_PN7
 
 #if defined(DSI_PANEL_219) || defined(DSI_PANEL_218)
-#define cardhu_dsia_bl_enb	TEGRA_GPIO_PW1
-#define cardhu_dsib_bl_enb	TEGRA_GPIO_PW0
-#define cardhu_dsi_panel_reset	TEGRA_GPIO_PD2
+#define cardhu_dsia_bl_enb		TEGRA_GPIO_PW1
+#define cardhu_dsib_bl_enb		TEGRA_GPIO_PW0
+#define cardhu_dsi_panel_reset		TEGRA_GPIO_PD2
 #endif
 
+#ifdef CONFIG_TEGRA_DC
 static struct regulator *cardhu_hdmi_reg = NULL;
 static struct regulator *cardhu_hdmi_pll = NULL;
 static struct regulator *cardhu_hdmi_vddio = NULL;
+#endif
 
 static atomic_t sd_brightness = ATOMIC_INIT(255);
 
@@ -72,6 +91,7 @@ static struct regulator *cardhu_lvds_vdd_panel = NULL;
 #endif
 
 static struct board_info board_info;
+static struct board_info display_board_info;
 
 static tegra_dc_bl_output cardhu_bl_output_measured = {
 	0, 1, 2, 3, 4, 5, 6, 7,
@@ -209,7 +229,13 @@ static int cardhu_backlight_notify(struct device *unused, int brightness)
 	if (brightness > 255) {
 		pr_info("Error: Brightness > 255!\n");
 	} else {
-		brightness = bl_output[brightness];
+		/* This value depends on the panel.
+		  Current 19X12 panel with PM313 gets
+		  full brightness when the output is 0. */
+		if (display_board_info.board_id == BOARD_DISPLAY_PM313)
+			brightness = 255 - bl_output[brightness];
+		else
+			brightness = bl_output[brightness];
 	}
 
 	return brightness;
@@ -266,11 +292,25 @@ static int cardhu_panel_enable(void)
 		else
 			regulator_enable(cardhu_lvds_vdd_panel);
 	}
-	if ((board_info.board_id == BOARD_PM269) ||
-		(board_info.board_id == BOARD_E1257) ||
-		(board_info.board_id == BOARD_PM305) ||
-		(board_info.board_id == BOARD_PM311))
-		gpio_set_value(pm269_lvds_shutdown, 1);
+
+	if (display_board_info.board_id == BOARD_DISPLAY_PM313) {
+		/* lvds configuration */
+		gpio_set_value(pm313_R_FDE, 1);
+		gpio_set_value(pm313_R_FB, 1);
+		gpio_set_value(pm313_MODE0, 1);
+		gpio_set_value(pm313_MODE1, 0);
+		gpio_set_value(pm313_BPP, PM313_LVDS_PANEL_BPP);
+
+		/* FIXME : it may require more or less delay for latching
+		  values correctly before enabling RGB2LVDS */
+		mdelay(100);
+		gpio_set_value(pm313_lvds_shutdown, 1);
+	} else if ((display_board_info.board_id == BOARD_DISPLAY_E1247 &&
+			board_info.board_id == BOARD_PM269) ||
+			(board_info.board_id == BOARD_E1257) ||
+			(board_info.board_id == BOARD_PM305) ||
+			(board_info.board_id == BOARD_PM311))
+		gpio_set_value(e1247_pm269_lvds_shutdown, 1);
 	else
 		gpio_set_value(cardhu_lvds_shutdown, 1);
 
@@ -290,17 +330,23 @@ static int cardhu_panel_disable(void)
 	regulator_disable(cardhu_lvds_vdd_panel);
 	regulator_put(cardhu_lvds_vdd_panel);
 	cardhu_lvds_vdd_panel= NULL;
-	if ((board_info.board_id == BOARD_PM269) ||
-		(board_info.board_id == BOARD_E1257) ||
-		(board_info.board_id == BOARD_PM305) ||
-		(board_info.board_id == BOARD_PM311))
-		gpio_set_value(pm269_lvds_shutdown, 0);
-	else
+
+	if (display_board_info.board_id == BOARD_DISPLAY_PM313) {
+		gpio_set_value(pm313_lvds_shutdown, 0);
+	} else if ((display_board_info.board_id == BOARD_DISPLAY_E1247 &&
+			board_info.board_id == BOARD_PM269) ||
+			(board_info.board_id == BOARD_E1257) ||
+			(board_info.board_id == BOARD_PM305) ||
+			(board_info.board_id == BOARD_PM311)) {
+		gpio_set_value(e1247_pm269_lvds_shutdown, 0);
+	} else {
 		gpio_set_value(cardhu_lvds_shutdown, 0);
+	}
 	return 0;
 }
 #endif
 
+#ifdef CONFIG_TEGRA_DC
 static int cardhu_hdmi_vddio_enable(void)
 {
 	int ret;
@@ -378,6 +424,7 @@ static int cardhu_hdmi_disable(void)
 	cardhu_hdmi_pll = NULL;
 	return 0;
 }
+
 static struct resource cardhu_disp1_resources[] = {
 	{
 		.name	= "irq",
@@ -440,8 +487,25 @@ static struct resource cardhu_disp2_resources[] = {
 		.flags	= IORESOURCE_MEM,
 	},
 };
+#endif
 
 #ifndef CONFIG_TEGRA_CARDHU_DSI
+static struct tegra_dc_mode panel_19X12_modes[] = {
+	{
+		.pclk = 154000000,
+		.h_ref_to_sync = 11,
+		.v_ref_to_sync = 1,
+		.h_sync_width = 32,
+		.v_sync_width = 6,
+		.h_back_porch = 80,
+		.v_back_porch = 26,
+		.h_active = 1920,
+		.v_active = 1200,
+		.h_front_porch = 48,
+		.v_front_porch = 3,
+	},
+};
+
 static struct tegra_dc_mode cardhu_panel_modes[] = {
 	{
 		/* 1366x768@60Hz */
@@ -483,6 +547,7 @@ static struct tegra_dc_sd_settings cardhu_sd_settings = {
 	.hw_update_delay = 0,
 	.bin_width = -1,
 	.aggressiveness = 1,
+	.phase_in_adjustments = true,
 	.use_vid_luma = false,
 	/* Default video coefficients */
 	.coeff = {5, 9, 2},
@@ -568,6 +633,7 @@ static struct tegra_dc_sd_settings cardhu_sd_settings = {
 	.bl_device = &cardhu_backlight_device,
 };
 
+#ifdef CONFIG_TEGRA_DC
 #ifndef CONFIG_TEGRA_CARDHU_DSI
 static struct tegra_fb_data cardhu_fb_data = {
 	.win		= 0,
@@ -611,6 +677,7 @@ static struct tegra_dc_platform_data cardhu_disp2_pdata = {
 	.fb		= &cardhu_hdmi_fb_data,
 	.emc_clk_rate	= 300000000,
 };
+#endif
 
 #ifdef CONFIG_TEGRA_CARDHU_DSI
 static int cardhu_dsi_panel_enable(void)
@@ -894,6 +961,8 @@ static struct tegra_dc_out cardhu_disp1_out = {
 	.postsuspend	= cardhu_dsi_panel_postsuspend,
 #endif
 };
+
+#ifdef CONFIG_TEGRA_DC
 static struct tegra_dc_platform_data cardhu_disp1_pdata = {
 	.flags		= TEGRA_DC_FLAG_ENABLED,
 	.default_out	= &cardhu_disp1_out,
@@ -904,6 +973,7 @@ static struct tegra_dc_platform_data cardhu_disp1_pdata = {
 	.fb		= &cardhu_dsi_fb_data,
 #endif
 };
+
 static struct nvhost_device cardhu_disp1_device = {
 	.name		= "tegradc",
 	.id		= 0,
@@ -928,6 +998,12 @@ static struct nvhost_device cardhu_disp2_device = {
 		.platform_data = &cardhu_disp2_pdata,
 	},
 };
+#else
+static int cardhu_disp1_check_fb(struct device *dev, struct fb_info *info)
+{
+	return 0;
+}
+#endif
 
 static struct nvmap_platform_carveout cardhu_carveouts[] = {
 	[0] = NVMAP_HEAP_CARVEOUT_IRAM_INIT,
@@ -956,7 +1032,9 @@ static struct platform_device cardhu_nvmap_device = {
 
 static struct platform_device *cardhu_gfx_devices[] __initdata = {
 	&cardhu_nvmap_device,
+#ifdef CONFIG_TEGRA_GRHOST
 	&tegra_grhost_device,
+#endif
 	&tegra_pwfm0_device,
 	&cardhu_backlight_device,
 };
@@ -970,28 +1048,16 @@ struct early_suspend cardhu_panel_early_suspender;
 
 static void cardhu_panel_early_suspend(struct early_suspend *h)
 {
-	unsigned i;
-
 	/* power down LCD, add use a black screen for HDMI */
 	if (num_registered_fb > 0)
 		fb_blank(registered_fb[0], FB_BLANK_POWERDOWN);
 	if (num_registered_fb > 1)
 		fb_blank(registered_fb[1], FB_BLANK_NORMAL);
-#ifdef CONFIG_TEGRA_CONVSERVATIVE_GOV_ON_EARLYSUPSEND
-	cpufreq_save_default_governor();
-	cpufreq_set_conservative_governor();
-	cpufreq_set_conservative_governor_param(
-		SET_CONSERVATIVE_GOVERNOR_UP_THRESHOLD,
-		SET_CONSERVATIVE_GOVERNOR_DOWN_THRESHOLD);
-#endif
 }
 
 static void cardhu_panel_late_resume(struct early_suspend *h)
 {
 	unsigned i;
-#ifdef CONFIG_TEGRA_CONVSERVATIVE_GOV_ON_EARLYSUPSEND
-	cpufreq_restore_default_governor();
-#endif
 	for (i = 0; i < num_registered_fb; i++)
 		fb_blank(registered_fb[i], FB_BLANK_UNBLANK);
 }
@@ -1000,9 +1066,10 @@ static void cardhu_panel_late_resume(struct early_suspend *h)
 int __init cardhu_panel_init(void)
 {
 	int err;
-	struct resource *res;
+	struct resource __maybe_unused *res;
 
 	tegra_get_board_info(&board_info);
+	tegra_get_display_board_info(&display_board_info);
 
 	cardhu_carveouts[1].base = tegra_carveout_start;
 	cardhu_carveouts[1].size = tegra_carveout_size;
@@ -1015,18 +1082,68 @@ int __init cardhu_panel_init(void)
 		cardhu_disp1_out.n_modes = ARRAY_SIZE(cardhu_panel_modes_55hz);
 	}
 
-	if ((board_info.board_id == BOARD_PM269) ||
-		(board_info.board_id == BOARD_E1257) ||
-		(board_info.board_id == BOARD_PM305) ||
-		(board_info.board_id == BOARD_PM311)) {
-		gpio_request(pm269_lvds_shutdown, "lvds_shutdown");
-		gpio_direction_output(pm269_lvds_shutdown, 1);
-		tegra_gpio_enable(pm269_lvds_shutdown);
+#if defined(CONFIG_TEGRA_DC) && !defined(CONFIG_TEGRA_CARDHU_DSI)
+	if (display_board_info.board_id == BOARD_DISPLAY_PM313) {
+		/* initialize the values */
+#if defined(PM313_LVDS_PANEL_19X12)
+		cardhu_disp1_out.modes = panel_19X12_modes;
+		cardhu_disp1_out.n_modes = ARRAY_SIZE(panel_19X12_modes);
+		cardhu_disp1_out.parent_clk = "pll_d_out0";
+#if (PM313_LVDS_PANEL_BPP == 1)
+		cardhu_disp1_out.depth = 18;
+#else
+		cardhu_disp1_out.depth = 24;
+#endif
+		cardhu_fb_data.xres = 1920;
+		cardhu_fb_data.yres = 1200;
+
+		cardhu_disp2_out.parent_clk = "pll_d2_out0";
+		cardhu_hdmi_fb_data.xres = 1920;
+		cardhu_hdmi_fb_data.yres = 1200;
+#endif
+
+		/* lvds configuration */
+		err = gpio_request(pm313_R_FDE, "R_FDE");
+		err |= gpio_direction_output(pm313_R_FDE, 1);
+		tegra_gpio_enable(pm313_R_FDE);
+
+		err |= gpio_request(pm313_R_FB, "R_FB");
+		err |= gpio_direction_output(pm313_R_FB, 1);
+		tegra_gpio_enable(pm313_R_FB);
+
+		err |= gpio_request(pm313_MODE0, "MODE0");
+		err |= gpio_direction_output(pm313_MODE0, 1);
+		tegra_gpio_enable(pm313_MODE0);
+
+		err |= gpio_request(pm313_MODE1, "MODE1");
+		err |= gpio_direction_output(pm313_MODE1, 0);
+		tegra_gpio_enable(pm313_MODE1);
+
+		err |= gpio_request(pm313_BPP, "BPP");
+		err |= gpio_direction_output(pm313_BPP, PM313_LVDS_PANEL_BPP);
+		tegra_gpio_enable(pm313_BPP);
+
+		err = gpio_request(pm313_lvds_shutdown, "lvds_shutdown");
+		/* free ride provided by bootloader */
+		err |= gpio_direction_output(pm313_lvds_shutdown, 1);
+		tegra_gpio_enable(pm313_lvds_shutdown);
+
+		if (err)
+			printk(KERN_ERR "ERROR(s) in LVDS configuration\n");
+	} else if ((display_board_info.board_id == BOARD_DISPLAY_E1247 &&
+				board_info.board_id == BOARD_PM269) ||
+				(board_info.board_id == BOARD_E1257) ||
+				(board_info.board_id == BOARD_PM305) ||
+				(board_info.board_id == BOARD_PM311)) {
+		gpio_request(e1247_pm269_lvds_shutdown, "lvds_shutdown");
+		gpio_direction_output(e1247_pm269_lvds_shutdown, 1);
+		tegra_gpio_enable(e1247_pm269_lvds_shutdown);
 	} else {
 		gpio_request(cardhu_lvds_shutdown, "lvds_shutdown");
 		gpio_direction_output(cardhu_lvds_shutdown, 1);
 		tegra_gpio_enable(cardhu_lvds_shutdown);
 	}
+#endif
 
 	tegra_gpio_enable(cardhu_hdmi_hpd);
 	gpio_request(cardhu_hdmi_hpd, "hdmi_hpd");
@@ -1042,15 +1159,18 @@ int __init cardhu_panel_init(void)
 	err = platform_add_devices(cardhu_gfx_devices,
 				ARRAY_SIZE(cardhu_gfx_devices));
 
+#if defined(CONFIG_TEGRA_GRHOST) && defined(CONFIG_TEGRA_DC)
 	res = nvhost_get_resource_byname(&cardhu_disp1_device,
 					 IORESOURCE_MEM, "fbmem");
 	res->start = tegra_fb_start;
 	res->end = tegra_fb_start + tegra_fb_size - 1;
+#endif
 
 	/* Copy the bootloader fb to the fb. */
 	tegra_move_framebuffer(tegra_fb_start, tegra_bootloader_fb_start,
 				min(tegra_fb_size, tegra_bootloader_fb_size));
 
+#if defined(CONFIG_TEGRA_GRHOST) && defined(CONFIG_TEGRA_DC)
 	if (!err)
 		err = nvhost_device_register(&cardhu_disp1_device);
 
@@ -1060,8 +1180,9 @@ int __init cardhu_panel_init(void)
 	res->end = tegra_fb2_start + tegra_fb2_size - 1;
 	if (!err)
 		err = nvhost_device_register(&cardhu_disp2_device);
+#endif
 
-#if defined(CONFIG_TEGRA_NVAVP)
+#if defined(CONFIG_TEGRA_GRHOST) && defined(CONFIG_TEGRA_NVAVP)
 	if (!err)
 		err = nvhost_device_register(&nvavp_device);
 #endif

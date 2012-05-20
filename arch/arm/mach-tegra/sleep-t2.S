@@ -70,7 +70,6 @@
 #define TEGRA_PMC_VIRT		(TEGRA_PMC_BASE - IO_APB_PHYS + IO_APB_VIRT)
 #define TEGRA_ARM_PERIF_VIRT	(TEGRA_ARM_PERIF_BASE - IO_CPU_PHYS + IO_CPU_VIRT)
 #define TEGRA_CLK_RESET_VIRT	(TEGRA_CLK_RESET_BASE - IO_PPSB_PHYS + IO_PPSB_VIRT)
-#define TEGRA_PL310_VIRT	(TEGRA_ARM_PL310_BASE - IO_PPSB_PHYS + IO_PPSB_VIRT)
 
 #ifdef CONFIG_HOTPLUG_CPU
 /*
@@ -241,7 +240,7 @@ ENTRY(tegra2_sleep_wfi)
 
 #else
 	mcr	p15, 0, r11, c1, c0, 1	@ reenable coherency
-
+#endif
 	/* Invalidate the TLBs & BTAC */
 	mov	r1, #0
 	mcr	p15, 0, r1, c8, c3, 0	@ invalidate shared TLBs
@@ -257,12 +256,12 @@ ENTRY(tegra2_sleep_wfi)
 #else
 	bl	__cpuc_flush_kern_all
 #endif
-#endif
 
 #ifdef CONFIG_CACHE_L2X0
 	/* Issue a PL310 cache sync operation */
 	dsb
-	mov32	r2, TEGRA_PL310_VIRT + 0x730	@ cache sync
+	mov32	r2, TEGRA_PL310_VIRT
+	movw	r1, 0x730	@ cache sync
 	add	r2, r2, r1
 	mov	r1, #0
 	str	r1, [r2]
@@ -307,13 +306,15 @@ ENTRY(tegra2_lp1_reset)
 	 * enable PLLP.
 	 */
 	mov32	r0, TEGRA_CLK_RESET_BASE
+#ifndef CONFIG_TRUSTED_FOUNDATIONS
+	/* secure code handles 32KHz to CLKM/OSC clock switch */
 	mov	r1, #(1 << 28)
 	str	r1, [r0, #CLK_RESET_SCLK_BURST]
 	str	r1, [r0, #CLK_RESET_CCLK_BURST]
 	mov	r1, #0
 	str	r1, [r0, #CLK_RESET_SCLK_DIVIDER]
 	str	r1, [r0, #CLK_RESET_CCLK_DIVIDER]
-
+#endif
 	ldr	r1, [r0, #CLK_RESET_PLLM_BASE]
 	tst	r1, #(1 << 30)
 	orreq	r1, r1, #(1 << 30)

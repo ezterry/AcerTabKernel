@@ -50,6 +50,14 @@
 #include <asm/unaligned.h>
 #include <asm/dma.h>
 
+#if defined(CONFIG_ARCH_ACER_T30)
+#include "../../../../arch/arm/mach-tegra/gpio-names.h"
+#include "../../../../arch/arm/mach-tegra/board-acer-t30.h"
+#include <linux/gpio.h>
+extern int acer_board_type;
+extern int acer_board_id;
+#endif
+
 #include "fsl_usb2_udc.h"
 
 #ifdef CONFIG_ARCH_TEGRA
@@ -126,6 +134,16 @@ static const u8 fsl_udc_test_packet[53] = {
 /********************************************************************
  *	Internal Used Function
 ********************************************************************/
+#if defined(CONFIG_ARCH_ACER_T30)
+static int get_dock_gpio_pin(void)
+{
+	if (acer_board_type == BOARD_PICASSO_2 && (acer_board_id == BOARD_EVT || acer_board_id == BOARD_DVT1))
+		return TEGRA_GPIO_PBB0;
+	else
+		return TEGRA_GPIO_PBB6;
+}
+#endif
+
 /*-----------------------------------------------------------------
  * vbus_enabled() - checks vbus status
  *--------------------------------------------------------------*/
@@ -2721,7 +2739,6 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 	u32 dccparams;
 #if defined(CONFIG_ARCH_TEGRA)
 	struct resource *res_sys = NULL;
-	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
 #endif
 
 	if (strcmp(pdev->name, driver_name)) {
@@ -2876,6 +2893,15 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&udc_controller->work, fsl_udc_charger_detect_work);
 	INIT_WORK(&udc_controller->charger_work, fsl_udc_set_current_limit_work);
 
+	/* Get the regulator for drawing the vbus current in udc driver */
+	udc_controller->vbus_regulator = regulator_get(NULL, "usb_bat_chg");
+	if (IS_ERR(udc_controller->vbus_regulator)) {
+		dev_err(&pdev->dev,
+			"can't get charge regulator,err:%ld\n",
+			PTR_ERR(udc_controller->vbus_regulator));
+		udc_controller->vbus_regulator = NULL;
+	}
+
 #ifdef CONFIG_USB_OTG_UTILS
 	udc_controller->transceiver = otg_get_transceiver();
 	if (udc_controller->transceiver) {
@@ -2893,18 +2919,6 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 		fsl_udc_clk_suspend(false);
 #endif
 #endif
-
-	/* Get the regulator for drawing the vbus current in udc driver */
-	if (pdata->charge_regulator) {
-		udc_controller->vbus_regulator = regulator_get(NULL,
-							pdata->charge_regulator);
-		if (IS_ERR(udc_controller->vbus_regulator)) {
-			dev_err(&pdev->dev,
-				"can't get charge regulator,err:%ld\n",
-				PTR_ERR(udc_controller->vbus_regulator));
-			udc_controller->vbus_regulator = NULL;
-		}
-	}
 
 	return 0;
 
@@ -3015,12 +3029,20 @@ static int fsl_udc_resume(struct platform_device *pdev)
 			/* if there is no VBUS then power down the clocks and return */
 			fsl_udc_clk_disable();
 			return 0;
+#if defined(CONFIG_ARCH_ACER_T30)
+		} else if (!gpio_get_value(get_dock_gpio_pin())) {
+			/* if there is dock attached then power down the clocks and return */
+			fsl_udc_clk_disable();
+			return 0;
+#endif
 		} else {
 			fsl_udc_clk_disable();
 			if (udc_controller->transceiver->state == OTG_STATE_A_HOST)
 				return 0;
 			/* Detected VBUS set the transceiver state to device mode */
+#if !defined(CONFIG_ARCH_ACER_T20) && !defined(CONFIG_ARCH_ACER_T30)
 			udc_controller->transceiver->state = OTG_STATE_B_PERIPHERAL;
+#endif
 		}
 	}
 	fsl_udc_clk_resume(true);

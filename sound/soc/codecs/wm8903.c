@@ -674,6 +674,13 @@ SOC_SINGLE("Right Input PGA Volume", WM8903_ANALOGUE_RIGHT_INPUT_0,
 SOC_SINGLE("Right Input PGA Common Mode Switch", WM8903_ANALOGUE_RIGHT_INPUT_1,
 	   6, 1, 0),
 
+#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
+SOC_SINGLE("Mic Bias Switch", WM8903_MIC_BIAS_CONTROL_0,
+	   0, 3, 0),
+SOC_SINGLE("DAC Boost Switch", WM8903_AUDIO_INTERFACE_0,
+	   9, 3, 0),
+#endif
+
 /* ADCs */
 SOC_ENUM("ADC OSR", adc_osr),
 SOC_SINGLE("HPF Switch", WM8903_ADC_DIGITAL_0, 4, 1, 0),
@@ -1771,6 +1778,11 @@ static struct snd_soc_dai_driver wm8903_dai = {
 
 static int wm8903_suspend(struct snd_soc_codec *codec, pm_message_t state)
 {
+	struct wm8903_priv *wm8903 = snd_soc_codec_get_drvdata(codec);
+
+	if (wm8903->irq)
+		disable_irq(wm8903->irq);
+
 	wm8903_set_bias_level(codec, SND_SOC_BIAS_OFF);
 
 	return 0;
@@ -1778,10 +1790,14 @@ static int wm8903_suspend(struct snd_soc_codec *codec, pm_message_t state)
 
 static int wm8903_resume(struct snd_soc_codec *codec)
 {
+	struct wm8903_priv *wm8903 = snd_soc_codec_get_drvdata(codec);
 	int i;
 	u16 *reg_cache = codec->reg_cache;
 	u16 *tmp_cache = kmemdup(reg_cache, sizeof(wm8903_reg_defaults),
 				 GFP_KERNEL);
+
+	if (wm8903->irq)
+		enable_irq(wm8903->irq);
 
 	/* Bring the codec back up to standby first to minimise pop/clicks */
 	wm8903_set_bias_level(codec, SND_SOC_BIAS_STANDBY);

@@ -647,6 +647,13 @@ config I2C_SLAVE_TEGRA
 	  If you say yes to this option, support will be included for the
 	  I2C slave controller embedded in NVIDIA Tegra SOCs
 
+config I2C_ACER_ENABLE
+	tristate "ACER I2C function support"
+	depends on I2C_TEGRA
+	default n
+	help
+	  Say yes to support the acer i2c function
+
 config I2C_VERSATILE
 	tristate "ARM Versatile/Realview I2C bus support"
 	depends on ARCH_VERSATILE || ARCH_REALVIEW || ARCH_VEXPRESS

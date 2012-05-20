@@ -32,14 +32,13 @@
 #include <linux/gpio.h>
 #include <linux/input.h>
 #include <linux/platform_data/tegra_usb.h>
-#include <linux/usb/android_composite.h>
-#include <linux/usb/f_accessory.h>
 #include <linux/spi/spi.h>
 #include <linux/tegra_uart.h>
 #include <linux/fsl_devices.h>
 #include <linux/i2c/atmel_mxt_ts.h>
 #include <linux/memblock.h>
 
+#include <linux/nfc/pn544.h>
 #include <sound/max98088.h>
 
 #include <mach/clk.h>
@@ -53,31 +52,33 @@
 #include <mach/usb_phy.h>
 #include <mach/i2s.h>
 #include <mach/tegra_max98088_pdata.h>
-
+#include <mach/thermal.h>
+#include <mach/tegra-bb-power.h>
 #include "board.h"
 #include "clock.h"
 #include "board-enterprise.h"
+#include "baseband-xmm-power.h"
 #include "devices.h"
 #include "gpio-names.h"
 #include "fuse.h"
 #include "pm.h"
 
-#define USB_MANUFACTURER_NAME	"NVIDIA"
-#define USB_PRODUCT_ID_RNDIS	0x7103
-#define USB_VENDOR_ID			0x0955
-
-static struct usb_mass_storage_platform_data tegra_usb_fsg_platform = {
-	.vendor = "NVIDIA",
-	.product = "Tegra 3",
-	.nluns = 1,
-};
-
-static struct platform_device tegra_usb_fsg_device = {
-	.name = "usb_mass_storage",
-	.id = -1,
-	.dev = {
-		.platform_data = &tegra_usb_fsg_platform,
-	},
+/* All units are in millicelsius */
+static struct tegra_thermal_data thermal_data = {
+	.temp_throttle = 85000,
+	.temp_shutdown = 90000,
+	.temp_offset = TDIODE_OFFSET, /* temps based on tdiode */
+#ifdef CONFIG_TEGRA_EDP_LIMITS
+	.edp_offset = TDIODE_OFFSET,  /* edp based on tdiode */
+	.hysteresis_edp = 3000,
+#endif
+#ifdef CONFIG_TEGRA_THERMAL_SYSFS
+	.tc1 = 0,
+	.tc2 = 1,
+	.passive_delay = 2000,
+#else
+	.hysteresis_throttle = 1000,
+#endif
 };
 
 /* !!!TODO: Change for enterprise (Taken from Cardhu) */
@@ -117,7 +118,6 @@ static struct tegra_utmip_config utmi_phy_config[] = {
 	},
 };
 
-#ifdef CONFIG_BCM4329_RFKILL
 static struct resource enterprise_bcm4329_rfkill_resources[] = {
 	{
 		.name   = "bcm4329_nshutdown_gpio",
@@ -134,72 +134,45 @@ static struct platform_device enterprise_bcm4329_rfkill_device = {
 	.resource       = enterprise_bcm4329_rfkill_resources,
 };
 
-static noinline void __init enterprise_bt_rfkill(void)
-{
-	platform_device_register(&enterprise_bcm4329_rfkill_device);
+static struct resource enterprise_bluesleep_resources[] = {
+	[0] = {
+		.name = "gpio_host_wake",
+			.start  = TEGRA_GPIO_PS2,
+			.end    = TEGRA_GPIO_PS2,
+			.flags  = IORESOURCE_IO,
+	},
+	[1] = {
+		.name = "gpio_ext_wake",
+			.start  = TEGRA_GPIO_PE7,
+			.end    = TEGRA_GPIO_PE7,
+			.flags  = IORESOURCE_IO,
+	},
+	[2] = {
+		.name = "host_wake",
+			.start  = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PS2),
+			.end    = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PS2),
+			.flags  = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE,
+	},
+};
 
-	return;
-}
-#else
-static inline void enterprise_bt_rfkill(void) { }
-#endif
+static struct platform_device enterprise_bluesleep_device = {
+	.name           = "bluesleep",
+	.id             = -1,
+	.num_resources  = ARRAY_SIZE(enterprise_bluesleep_resources),
+	.resource       = enterprise_bluesleep_resources,
+};
 
 static void __init enterprise_setup_bluesleep(void)
 {
-	struct platform_device *pdev = NULL;
-	struct resource *res;
-
-	pdev = platform_device_alloc("bluesleep", 0);
-	if (!pdev) {
-		pr_err("unable to allocate platform device for bluesleep");
-		return;
-	}
-
-	res = kzalloc(sizeof(struct resource) * 3, GFP_KERNEL);
-	if (!res) {
-		pr_err("unable to allocate resource for bluesleep\n");
-		goto err_free_dev;
-	}
-
-	res[0].name   = "gpio_host_wake";
-	res[0].start  = TEGRA_GPIO_PS2;
-	res[0].end    = TEGRA_GPIO_PS2;
-	res[0].flags  = IORESOURCE_IO;
-
-	res[1].name   = "gpio_ext_wake";
-	res[1].start  = TEGRA_GPIO_PE7;
-	res[1].end    = TEGRA_GPIO_PE7;
-	res[1].flags  = IORESOURCE_IO;
-
-	res[2].name   = "host_wake";
-	res[2].start  = gpio_to_irq(TEGRA_GPIO_PS2);
-	res[2].end    = gpio_to_irq(TEGRA_GPIO_PS2);
-	res[2].flags  = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE ;
-
-	if (platform_device_add_resources(pdev, res, 3)) {
-		pr_err("unable to add resources to bluesleep device\n");
-		goto err_free_res;
-	}
-
-	if (platform_device_add(pdev)) {
-		pr_err("unable to add bluesleep device\n");
-		goto err_free_res;
-	}
+	platform_device_register(&enterprise_bluesleep_device);
 	tegra_gpio_enable(TEGRA_GPIO_PS2);
 	tegra_gpio_enable(TEGRA_GPIO_PE7);
-
-	return;
-
-err_free_res:
-	kfree(res);
-err_free_dev:
-	platform_device_put(pdev);
 	return;
 }
 
 static __initdata struct tegra_clk_init_table enterprise_clk_init_table[] = {
 	/* name		parent		rate		enabled */
-	{ "pll_m",	NULL,		0,		true},
+	{ "pll_m",	NULL,		0,		false},
 	{ "hda",	"pll_p",	108000000,	false},
 	{ "hda2codec_2x","pll_p",	48000000,	false},
 	{ "pwm",	"clk_32k",	32768,		false},
@@ -207,111 +180,20 @@ static __initdata struct tegra_clk_init_table enterprise_clk_init_table[] = {
 	{ "pll_a",	NULL,		564480000,	false},
 	{ "pll_a_out0",	NULL,		11289600,	false},
 	{ "i2s0",	"pll_a_out0",	0,		false},
+	{ "i2s1",	"pll_a_out0",	0,		false},
+	{ "i2s2",	"pll_a_out0",	0,		false},
+	{ "i2s3",	"pll_a_out0",	0,		false},
 	{ "spdif_out",	"pll_a_out0",	0,		false},
+	{ "d_audio",	"pll_a_out0",	0,		false},
+	{ "dam0",	"pll_a_out0",	0,		false},
+	{ "dam1",	"pll_a_out0",	0,		false},
+	{ "dam2",	"pll_a_out0",	0,		false},
+	{ "audio0",	"i2s0_sync",	0,		false},
+	{ "audio1",	"i2s1_sync",	0,		false},
+	{ "audio2",	"i2s2_sync",	0,		false},
+	{ "audio3",	"i2s3_sync",	0,		false},
 	{ NULL,		NULL,		0,		0},
 };
-
-static char *usb_functions_mtp_ums[] = { "mtp", "usb_mass_storage" };
-static char *usb_functions_adb[] = { "mtp", "adb", "usb_mass_storage" };
-
-#ifdef CONFIG_USB_ANDROID_RNDIS
-static char *usb_functions_rndis[] = { "rndis" };
-static char *usb_functions_rndis_adb[] = { "rndis", "adb" };
-#endif
-
-#ifdef CONFIG_USB_ANDROID_ACCESSORY
-static char *usb_functions_accessory[] = { "accessory" };
-static char *usb_functions_accessory_adb[] = { "accessory", "adb" };
-#endif
-
-static char *usb_functions_all[] = {
-#ifdef CONFIG_USB_ANDROID_RNDIS
-	"rndis",
-#endif
-#ifdef CONFIG_USB_ANDROID_ACCESSORY
-	"accessory",
-#endif
-	"mtp",
-	"adb",
-	"usb_mass_storage"
-};
-
-
-static struct android_usb_product usb_products[] = {
-	{
-		.product_id     = 0x7102,
-		.num_functions  = ARRAY_SIZE(usb_functions_mtp_ums),
-		.functions      = usb_functions_mtp_ums,
-	},
-	{
-		.product_id     = 0x7100,
-		.num_functions  = ARRAY_SIZE(usb_functions_adb),
-		.functions      = usb_functions_adb,
-	},
-#ifdef CONFIG_USB_ANDROID_ACCESSORY
-	{
-		.vendor_id	= USB_ACCESSORY_VENDOR_ID,
-		.product_id	= USB_ACCESSORY_PRODUCT_ID,
-		.num_functions	= ARRAY_SIZE(usb_functions_accessory),
-		.functions	= usb_functions_accessory,
-	},
-	{
-		.vendor_id	= USB_ACCESSORY_VENDOR_ID,
-		.product_id	= USB_ACCESSORY_ADB_PRODUCT_ID,
-		.num_functions	= ARRAY_SIZE(usb_functions_accessory_adb),
-		.functions	= usb_functions_accessory_adb,
-	},
-#endif
-#ifdef CONFIG_USB_ANDROID_RNDIS
-	{
-		.product_id     = USB_PRODUCT_ID_RNDIS,
-		.num_functions  = ARRAY_SIZE(usb_functions_rndis),
-		.functions      = usb_functions_rndis,
-	},
-	{
-		.product_id     = USB_PRODUCT_ID_RNDIS,
-		.num_functions  = ARRAY_SIZE(usb_functions_rndis_adb),
-		.functions      = usb_functions_rndis_adb,
-	},
-#endif
-};
-
-/* standard android USB platform data */
-static struct android_usb_platform_data andusb_plat = {
-	.vendor_id              = 0x0955,
-	.product_id             = 0x7100,
-	.manufacturer_name      = "NVIDIA",
-	.product_name           = "Enterprise",
-	.serial_number          = NULL,
-	.num_products = ARRAY_SIZE(usb_products),
-	.products = usb_products,
-	.num_functions = ARRAY_SIZE(usb_functions_all),
-	.functions = usb_functions_all,
-};
-
-static struct platform_device androidusb_device = {
-	.name   = "android_usb",
-	.id     = -1,
-	.dev    = {
-		.platform_data  = &andusb_plat,
-	},
-};
-
-#ifdef CONFIG_USB_ANDROID_RNDIS
-static struct usb_ether_platform_data rndis_pdata = {
-	.ethaddr = {0, 0, 0, 0, 0, 0},
-	.vendorID = USB_VENDOR_ID,
-	.vendorDescr = USB_MANUFACTURER_NAME,
-};
-
-static struct platform_device rndis_device = {
-	.name   = "rndis",
-	.id     = -1,
-	.dev    = {
-		.platform_data  = &rndis_pdata,
-	},
-};
-#endif
 
 static struct tegra_i2c_platform_data enterprise_i2c1_platform_data = {
 	.adapter_nr	= 0,
@@ -453,11 +335,23 @@ static struct max98088_pdata enterprise_max98088_pdata = {
 	.receiver_mode = 0,	/* 0 = amplifier, 1 = line output */
 };
 
+static struct pn544_i2c_platform_data nfc_pdata = {
+		.irq_gpio = TEGRA_GPIO_PS4,
+		.ven_gpio = TEGRA_GPIO_PM6,
+		.firm_gpio = 0,
+};
+
 
 static struct i2c_board_info __initdata max98088_board_info = {
 	I2C_BOARD_INFO("max98088", 0x10),
 	.platform_data = &enterprise_max98088_pdata,
 	.irq = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_HP_DET),
+};
+
+static struct i2c_board_info __initdata nfc_board_info = {
+	I2C_BOARD_INFO("pn544", 0x28),
+	.platform_data = &nfc_pdata,
+	.irq = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PS4),
 };
 
 static void enterprise_i2c_init(void)
@@ -475,6 +369,7 @@ static void enterprise_i2c_init(void)
 	platform_device_register(&tegra_i2c_device1);
 
 	i2c_register_board_info(0, &max98088_board_info, 1);
+	i2c_register_board_info(0, &nfc_board_info, 1);
 }
 
 static struct platform_device *enterprise_uart_devices[] __initdata = {
@@ -488,7 +383,9 @@ static struct platform_device *enterprise_uart_devices[] __initdata = {
 static struct uart_clk_parent uart_parent_clk[] = {
 	[0] = {.name = "clk_m"},
 	[1] = {.name = "pll_p"},
+#ifndef CONFIG_TEGRA_PLLM_RESTRICTED
 	[2] = {.name = "pll_m"},
+#endif
 };
 static struct tegra_uart_platform_data enterprise_uart_pdata;
 
@@ -588,6 +485,15 @@ static struct tegra_max98088_platform_data enterprise_audio_pdata = {
 	.gpio_hp_mute		= -1,
 	.gpio_int_mic_en	= -1,
 	.gpio_ext_mic_en	= -1,
+	.audio_port_id		= {
+		[HIFI_CODEC] = 0,
+		[BASEBAND] = 2,
+		[BT_SCO] = 3,
+	},
+	.baseband_param		= {
+		.rate = 8000,
+		.channels = 1,
+	},
 };
 
 static struct platform_device enterprise_audio_device = {
@@ -612,14 +518,9 @@ static struct platform_device ram_console_device = {
 };
 
 static struct platform_device *enterprise_devices[] __initdata = {
-	&tegra_usb_fsg_device,
-	&androidusb_device,
 	&tegra_pmu_device,
 	&tegra_rtc_device,
 	&tegra_udc_device,
-#if defined(CONFIG_SND_HDA_TEGRA)
-	&tegra_hda_device,
-#endif
 #if defined(CONFIG_TEGRA_IOVMM_SMMU)
 	&tegra_smmu_device,
 #endif
@@ -628,13 +529,9 @@ static struct platform_device *enterprise_devices[] __initdata = {
 	&tegra_avp_device,
 #endif
 	&tegra_camera,
-	&tegra_ahub_device,
-	&tegra_i2s_device0,
-	&tegra_spdif_device,
-	&spdif_dit_device,
-	&tegra_pcm_device,
-	&enterprise_audio_device,
+	&enterprise_bcm4329_rfkill_device,
 	&tegra_spi_device4,
+	&tegra_hda_device,
 #if defined(CONFIG_CRYPTO_DEV_TEGRA_SE)
 	&tegra_se_device,
 #endif
@@ -749,6 +646,22 @@ static struct usb_phy_plat_data tegra_usb_phy_pdata[] = {
 	},
 };
 
+static struct tegra_uhsic_config uhsic_phy_config = {
+	.enable_gpio = -1,
+	.reset_gpio = -1,
+	.sync_start_delay = 9,
+	.idle_wait_delay = 17,
+	.term_range_adj = 0,
+	.elastic_underrun_limit = 16,
+	.elastic_overrun_limit = 16,
+};
+
+static struct tegra_ehci_platform_data tegra_ehci_uhsic_pdata = {
+	.phy_type = TEGRA_USB_PHY_TYPE_HSIC,
+	.phy_config = &uhsic_phy_config,
+	.operating_mode = TEGRA_USB_HOST,
+	.power_down_on_bus_suspend = 1,
+};
 
 static struct tegra_ehci_platform_data tegra_ehci_pdata[] = {
 	[0] = {
@@ -768,31 +681,36 @@ static struct tegra_ehci_platform_data tegra_ehci_pdata[] = {
 	},
 };
 
-static struct platform_device *tegra_usb_otg_host_register(void)
+static struct tegra_otg_platform_data tegra_otg_pdata = {
+	.ehci_device = &tegra_ehci1_device,
+	.ehci_pdata = &tegra_ehci_pdata[0],
+};
+
+struct platform_device *tegra_usb_hsic_host_register(void)
 {
 	struct platform_device *pdev;
 	void *platform_data;
 	int val;
 
-	pdev = platform_device_alloc(tegra_ehci1_device.name,
-		tegra_ehci1_device.id);
+	pdev = platform_device_alloc(tegra_ehci2_device.name,
+		tegra_ehci2_device.id);
 	if (!pdev)
 		return NULL;
 
-	val = platform_device_add_resources(pdev, tegra_ehci1_device.resource,
-		tegra_ehci1_device.num_resources);
+	val = platform_device_add_resources(pdev, tegra_ehci2_device.resource,
+		tegra_ehci2_device.num_resources);
 	if (val)
 		goto error;
 
-	pdev->dev.dma_mask =  tegra_ehci1_device.dev.dma_mask;
-	pdev->dev.coherent_dma_mask = tegra_ehci1_device.dev.coherent_dma_mask;
+	pdev->dev.dma_mask =  tegra_ehci2_device.dev.dma_mask;
+	pdev->dev.coherent_dma_mask = tegra_ehci2_device.dev.coherent_dma_mask;
 
 	platform_data = kmalloc(sizeof(struct tegra_ehci_platform_data),
 		GFP_KERNEL);
 	if (!platform_data)
 		goto error;
 
-	memcpy(platform_data, &tegra_ehci_pdata[0],
+	memcpy(platform_data, &tegra_ehci_uhsic_pdata,
 				sizeof(struct tegra_ehci_platform_data));
 	pdev->dev.platform_data = platform_data;
 
@@ -810,27 +728,49 @@ error:
 	return NULL;
 }
 
-static void tegra_usb_otg_host_unregister(struct platform_device *pdev)
+void tegra_usb_hsic_host_unregister(struct platform_device *pdev)
 {
 	platform_device_unregister(pdev);
 }
 
-static struct tegra_otg_platform_data tegra_otg_pdata = {
-	.host_register = &tegra_usb_otg_host_register,
-	.host_unregister = &tegra_usb_otg_host_unregister,
-};
-
-#ifdef CONFIG_USB_ANDROID_RNDIS
-#define SERIAL_NUMBER_LENGTH 20
-static char usb_serial_num[SERIAL_NUMBER_LENGTH];
+static int enterprise_usb_hsic_postsupend(void)
+{
+	pr_debug("%s\n", __func__);
+#ifdef CONFIG_TEGRA_BB_XMM_POWER
+	baseband_xmm_set_power_status(BBXMM_PS_L2);
 #endif
+	return 0;
+}
+
+static int enterprise_usb_hsic_preresume(void)
+{
+	pr_debug("%s\n", __func__);
+#ifdef CONFIG_TEGRA_BB_XMM_POWER
+	baseband_xmm_set_power_status(BBXMM_PS_L2TOL0);
+#endif
+	return 0;
+}
+
+static int enterprise_usb_hsic_phy_ready(void)
+{
+	pr_debug("%s\n", __func__);
+#ifdef CONFIG_TEGRA_BB_XMM_POWER
+	baseband_xmm_set_power_status(BBXMM_PS_L0);
+#endif
+	return 0;
+}
+
+static int enterprise_usb_hsic_phy_off(void)
+{
+	pr_debug("%s\n", __func__);
+#ifdef CONFIG_TEGRA_BB_XMM_POWER
+	baseband_xmm_set_power_status(BBXMM_PS_L3);
+#endif
+	return 0;
+}
 
 static void enterprise_usb_init(void)
 {
-#ifdef CONFIG_USB_ANDROID_RNDIS
-	char *src = usb_serial_num;
-	int i;
-#endif
 	struct	fsl_usb2_platform_data *udc_pdata;
 
 	tegra_usb_phy_init(tegra_usb_phy_pdata, ARRAY_SIZE(tegra_usb_phy_pdata));
@@ -838,24 +778,37 @@ static void enterprise_usb_init(void)
 	tegra_otg_device.dev.platform_data = &tegra_otg_pdata;
 	platform_device_register(&tegra_otg_device);
 
-	tegra_ehci3_device.dev.platform_data = &tegra_ehci_pdata[2];
-	platform_device_register(&tegra_ehci3_device);
-
 	udc_pdata = tegra_udc_device.dev.platform_data;
-	udc_pdata->charge_regulator ="usb_bat_chg";
+}
 
-#ifdef CONFIG_USB_ANDROID_RNDIS
-	/* create a fake MAC address from our serial number.
-	 * first byte is 0x02 to signify locally administered.
-	 */
-	rndis_pdata.ethaddr[0] = 0x02;
-	for (i = 0; *src; i++) {
-		/* XOR the USB serial across the remaining bytes */
-		rndis_pdata.ethaddr[i % (ETH_ALEN - 1) + 1] ^= *src++;
-	}
-	platform_device_register(&rndis_device);
-#endif
+static struct platform_device *enterprise_audio_devices[] __initdata = {
+	&tegra_ahub_device,
+	&tegra_dam_device0,
+	&tegra_dam_device1,
+	&tegra_dam_device2,
+	&tegra_i2s_device2,
+	&tegra_i2s_device3,
+	&tegra_spdif_device,
+	&spdif_dit_device,
+	&bluetooth_dit_device,
+	&baseband_dit_device,
+	&tegra_pcm_device,
+	&enterprise_audio_device,
+};
 
+static void enterprise_audio_init(void)
+{
+	struct board_info board_info;
+
+	tegra_get_board_info(&board_info);
+	if (board_info.board_id == BOARD_E1197) {
+		platform_device_register(&tegra_i2s_device1);
+		enterprise_audio_pdata.audio_port_id[HIFI_CODEC] = 1;
+	} else
+		platform_device_register(&tegra_i2s_device0);
+
+	platform_add_devices(enterprise_audio_devices,
+			ARRAY_SIZE(enterprise_audio_devices));
 }
 
 static void enterprise_gps_init(void)
@@ -864,30 +817,126 @@ static void enterprise_gps_init(void)
 	tegra_gpio_enable(TEGRA_GPIO_PE5);
 }
 
+static struct baseband_power_platform_data tegra_baseband_power_data = {
+	.baseband_type = BASEBAND_XMM,
+	.modem = {
+		.xmm = {
+			.bb_rst = XMM_GPIO_BB_RST,
+			.bb_on = XMM_GPIO_BB_ON,
+			.ipc_bb_wake = XMM_GPIO_IPC_BB_WAKE,
+			.ipc_ap_wake = XMM_GPIO_IPC_AP_WAKE,
+			.ipc_hsic_active = XMM_GPIO_IPC_HSIC_ACTIVE,
+			.ipc_hsic_sus_req = XMM_GPIO_IPC_HSIC_SUS_REQ,
+		},
+	},
+};
+
+static struct platform_device tegra_baseband_power_device = {
+	.name = "baseband_xmm_power",
+	.id = -1,
+	.dev = {
+		.platform_data = &tegra_baseband_power_data,
+	},
+};
+
+static struct platform_device tegra_baseband_power2_device = {
+	.name = "baseband_xmm_power2",
+	.id = -1,
+	.dev = {
+		.platform_data = &tegra_baseband_power_data,
+	},
+};
+
+#ifdef CONFIG_TEGRA_BB_M7400
+static union tegra_bb_gpio_id m7400_gpio_id = {
+	.m7400 = {
+		.pwr_status = GPIO_BB_RESET,
+		.pwr_on = GPIO_BB_PWRON,
+		.uart_awr = GPIO_BB_APACK,
+		.uart_cwr = GPIO_BB_CPACK,
+		.usb_awr = GPIO_BB_APACK2,
+		.usb_cwr = GPIO_BB_CPACK2,
+		.service = GPIO_BB_RSVD2,
+		.resout2 = GPIO_BB_RSVD1,
+	},
+};
+
+static struct tegra_bb_pdata m7400_pdata = {
+	.id = &m7400_gpio_id,
+	.device = &tegra_ehci2_device,
+	.ehci_register = tegra_usb_hsic_host_register,
+	.ehci_unregister = tegra_usb_hsic_host_unregister,
+	.bb_id = TEGRA_BB_M7400,
+};
+
+static struct platform_device tegra_baseband_m7400_device = {
+	.name = "tegra_baseband_power",
+	.id = -1,
+	.dev = {
+		.platform_data = &m7400_pdata,
+	},
+};
+#endif
+
 static void enterprise_baseband_init(void)
 {
 	int modem_id = tegra_get_modem_id();
 
 	switch (modem_id) {
-	case 1: /* PH450 ULPI */
+	case TEGRA_BB_PH450: /* PH450 ULPI */
 		enterprise_modem_init();
 		break;
-	case 2: /* 6260 HSIC */
+	case TEGRA_BB_XMM6260: /* XMM6260 HSIC */
+		/* xmm baseband - do not switch off phy during suspend */
+		tegra_ehci_uhsic_pdata.power_down_on_bus_suspend = 0;
+		uhsic_phy_config.postsuspend = enterprise_usb_hsic_postsupend;
+		uhsic_phy_config.preresume = enterprise_usb_hsic_preresume;
+		uhsic_phy_config.usb_phy_ready = enterprise_usb_hsic_phy_ready;
+		uhsic_phy_config.post_phy_off = enterprise_usb_hsic_phy_off;
+		/* enable XMM6260 baseband gpio(s) */
+		tegra_gpio_enable(tegra_baseband_power_data.modem.generic
+			.mdm_reset);
+		tegra_gpio_enable(tegra_baseband_power_data.modem.generic
+			.mdm_on);
+		tegra_gpio_enable(tegra_baseband_power_data.modem.generic
+			.ap2mdm_ack);
+		tegra_gpio_enable(tegra_baseband_power_data.modem.generic
+			.mdm2ap_ack);
+		tegra_gpio_enable(tegra_baseband_power_data.modem.generic
+			.ap2mdm_ack2);
+		tegra_gpio_enable(tegra_baseband_power_data.modem.generic
+			.mdm2ap_ack2);
+		tegra_baseband_power_data.hsic_register =
+						&tegra_usb_hsic_host_register;
+		tegra_baseband_power_data.hsic_unregister =
+						&tegra_usb_hsic_host_unregister;
+		platform_device_register(&tegra_baseband_power_device);
+		platform_device_register(&tegra_baseband_power2_device);
 		break;
+#ifdef CONFIG_TEGRA_BB_M7400
+	case TEGRA_BB_M7400: /* M7400 HSIC */
+		tegra_ehci2_device.dev.platform_data
+			= &tegra_ehci_uhsic_pdata;
+		platform_device_register(&tegra_baseband_m7400_device);
+		break;
+#endif
 	}
+}
+
+static void enterprise_nfc_init(void)
+{
+	tegra_gpio_enable(TEGRA_GPIO_PS4);
+	tegra_gpio_enable(TEGRA_GPIO_PM6);
 }
 
 static void __init tegra_enterprise_init(void)
 {
-	char serial[20];
-
+	tegra_thermal_init(&thermal_data);
 	tegra_clk_init_from_table(enterprise_clk_init_table);
 	enterprise_pinmux_init();
 	enterprise_i2c_init();
 	enterprise_uart_init();
 	enterprise_usb_init();
-	snprintf(serial, sizeof(serial), "%016llx", tegra_chip_uid());
-	andusb_plat.serial_number = kstrdup(serial, GFP_KERNEL);
 	enterprise_tsensor_init();
 	platform_add_devices(enterprise_devices, ARRAY_SIZE(enterprise_devices));
 	enterprise_regulator_init();
@@ -897,15 +946,17 @@ static void __init tegra_enterprise_init(void)
 #endif
 	enterprise_kbc_init();
 	enterprise_touch_init();
+	enterprise_audio_init();
 	enterprise_gps_init();
 	enterprise_baseband_init();
 	enterprise_panel_init();
-	enterprise_bt_rfkill();
 	enterprise_setup_bluesleep();
 	enterprise_emc_init();
 	enterprise_sensors_init();
 	enterprise_suspend_init();
+	enterprise_bpc_mgmt_init();
 	tegra_release_bootloader_fb();
+	enterprise_nfc_init();
 }
 
 static void __init tegra_enterprise_ramconsole_reserve(unsigned long size)

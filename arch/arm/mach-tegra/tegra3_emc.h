@@ -41,11 +41,23 @@ struct tegra_emc_table {
 	u32 emc_mode_reset;
 	u32 emc_mode_1;
 	u32 emc_mode_2;
+	u32 emc_dsr;
+	int emc_min_mv;
 };
+
+struct clk;
 
 void tegra_init_emc(const struct tegra_emc_table *table, int table_size);
 
+void tegra_emc_dram_type_init(struct clk *c);
 int tegra_emc_get_dram_type(void);
+
+#ifdef CONFIG_PM_SLEEP
+void tegra_mc_timing_restore(void);
+#else
+static inline void tegra_mc_timing_restore(void)
+{ }
+#endif
 
 #define EMC_INTSTATUS				0x0
 #define EMC_INTSTATUS_CLKCHANGE_COMPLETE	(0x1 << 4)
@@ -236,6 +248,11 @@ enum {
 #define MC_EMEM_ADR_CFG				0x54
 #define MC_EMEM_ARB_CFG				0x90
 #define MC_EMEM_ARB_OUTSTANDING_REQ		0x94
+#define MC_EMEM_ARB_OUTSTANDING_REQ_MAX_SHIFT	0
+#define MC_EMEM_ARB_OUTSTANDING_REQ_MAX_MASK	\
+	(0x1FF << MC_EMEM_ARB_OUTSTANDING_REQ_MAX_SHIFT)
+#define MC_EMEM_ARB_OUTSTANDING_REQ_HOLDOFF_OVERRIDE	(0x1 << 30)
+#define MC_EMEM_ARB_OUTSTANDING_REQ_LIMIT_ENABLE	(0x1 << 31)
 #define MC_EMEM_ARB_TIMING_RCD			0x98
 #define MC_EMEM_ARB_TIMING_RP			0x9c
 #define MC_EMEM_ARB_TIMING_RC			0xa0
@@ -252,8 +269,11 @@ enum {
 #define MC_EMEM_ARB_DA_COVERS			0xd4
 #define MC_EMEM_ARB_MISC0			0xd8
 #define MC_EMEM_ARB_MISC0_EMC_SAME_FREQ		(0x1 << 27)
+#define MC_EMEM_ARB_MISC1			0xdc
 #define MC_EMEM_ARB_RING1_THROTTLE		0xe0
+#define MC_EMEM_ARB_RING3_THROTTLE		0xe4
 #define MC_EMEM_ARB_OVERRIDE			0xe8
+#define MC_TIMING_CONTROL			0xfc
 #define MC_RESERVED_RSV				0x3fc
 
 #endif

@@ -110,7 +110,7 @@ static irqreturn_t tegra_mc_error_isr(int irq, void *data)
 		 MC_INT_INVALID_GART_PAGE |
 		 MC_INT_DECERR_EMEM_OTHERS);
 
-	cancel_delayed_work(&unthrottle_prints_work);
+	__cancel_delayed_work(&unthrottle_prints_work);
 
 	spin_lock(&mc_lock);
 	count = ++error_count;
@@ -177,7 +177,7 @@ out:
 	return IRQ_HANDLED;
 }
 
-void __init tegra_mc_init(void)
+int __init tegra_mc_init(void)
 {
 	if (request_irq(INT_MC_GENERAL, tegra_mc_error_isr, 0,
 			"mc_status", NULL)) {
@@ -188,5 +188,6 @@ void __init tegra_mc_init(void)
 			MC_INT_DECERR_EMEM_OTHERS;
 		writel(reg, mc + MC_INT_MASK);
 	}
+	return 0;
 }
 arch_initcall(tegra_mc_init);

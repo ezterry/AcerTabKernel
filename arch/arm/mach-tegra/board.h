@@ -42,15 +42,16 @@ void __init tegra_init_irq(void);
 void __init tegra_init_clock(void);
 void __init tegra_reserve(unsigned long carveout_size, unsigned long fb_size,
 	unsigned long fb2_size);
-int __init tegra_pcie_init(bool init_port0, bool init_port1);
-void tegra_init_cache(void);
+void tegra_init_cache(bool init);
 void __init tegra_release_bootloader_fb(void);
 void __init tegra_protected_aperture_init(unsigned long aperture);
 void tegra_move_framebuffer(unsigned long to, unsigned long from,
 	unsigned long size);
 bool is_tegra_debug_uartport_hs(void);
 int get_tegra_uart_debug_port_id(void);
+#if !defined(CONFIG_ARCH_ACER_T20)
 int arb_lost_recovery(int scl_gpio, int sda_gpio);
+#endif
 
 extern unsigned long tegra_bootloader_fb_start;
 extern unsigned long tegra_bootloader_fb_size;
@@ -60,6 +61,8 @@ extern unsigned long tegra_fb2_start;
 extern unsigned long tegra_fb2_size;
 extern unsigned long tegra_carveout_start;
 extern unsigned long tegra_carveout_size;
+extern unsigned long tegra_vpr_start;
+extern unsigned long tegra_vpr_size;
 extern unsigned long tegra_lp0_vec_start;
 extern unsigned long tegra_lp0_vec_size;
 extern bool tegra_lp0_vec_relocate;
@@ -94,6 +97,8 @@ enum audio_codec_type {
 
 void tegra_get_board_info(struct board_info *);
 void tegra_get_pmu_board_info(struct board_info *bi);
+void tegra_get_display_board_info(struct board_info *bi);
+void tegra_get_camera_board_info(struct board_info *bi);
 #ifdef CONFIG_TEGRA_CONVSERVATIVE_GOV_ON_EARLYSUPSEND
 #define SET_CONSERVATIVE_GOVERNOR_UP_THRESHOLD 95
 #define SET_CONSERVATIVE_GOVERNOR_DOWN_THRESHOLD 50
@@ -108,5 +113,6 @@ enum panel_type get_panel_type(void);
 int tegra_get_modem_id(void);
 enum power_supply_type get_power_supply_type(void);
 enum audio_codec_type get_audio_codec_type(void);
+int get_maximum_cpu_current_supported(void);
 
 #endif

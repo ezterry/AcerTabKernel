@@ -18,6 +18,10 @@ if NEW_LEDS
 
 comment "LED drivers"
 
+config ACER_LEDS
+	tristate "LED Support for ACER"
+	default n
+
 config LEDS_88PM860X
 	tristate "LED Support for Marvell 88PM860x PMIC"
 	depends on LEDS_CLASS

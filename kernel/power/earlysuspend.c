@@ -22,6 +22,11 @@
 #include <linux/workqueue.h>
 
 #include "power.h"
+#ifdef CONFIG_TOUCHSCREEN_CYPRESS
+#include <linux/gpio.h>
+#include <linux/delay.h>
+#define TEGRA_GPIO_PQ7    135
+#endif
 
 enum {
 	DEBUG_USER_STATE = 1U << 0,
@@ -160,6 +165,16 @@ void request_suspend_state(suspend_state_t new_state)
 			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 			tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
 	}
+#ifdef CONFIG_TOUCHSCREEN_CYPRESS
+	if (new_state == 0) {
+		pr_info("[TP] Reset\n");
+		if (gpio_direction_output(TEGRA_GPIO_PQ7, 0) < 0)
+			pr_info("[TP] gpio_direction_output(TEGRA_GPIO_PQ7, 0) failed\n");
+
+		mdelay(20);
+		gpio_set_value(TEGRA_GPIO_PQ7, 1);
+	}
+#endif
 	if (!old_sleep && new_state != PM_SUSPEND_ON) {
 		state |= SUSPEND_REQUESTED;
 		queue_work(suspend_work_queue, &early_suspend_work);

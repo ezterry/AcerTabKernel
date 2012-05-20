@@ -64,6 +64,9 @@ static unsigned long go_maxspeed_load;
 /* Base of exponential raise to max speed; if 0 - jump to maximum */
 static unsigned long boost_factor;
 
+/* Max frequency boost in Hz; if 0 - no max is enforced */
+static unsigned long max_boost;
+
 /*
  * Targeted sustainable load relatively to current frequency.
  * If 0, target is set realtively to the max speed
@@ -194,6 +197,9 @@ static unsigned int cpufreq_interactive_get_target(
 			return policy->max;
 
 		target_freq = policy->cur * boost_factor;
+
+		if (max_boost && target_freq > policy->cur + max_boost)
+			target_freq = policy->cur + max_boost;
 	}
 	else {
 		if (!sustain_load)
@@ -275,7 +281,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 	delta_time = (unsigned int) cputime64_sub(pcpu->timer_run_time,
 						  pcpu->freq_change_time);
 
-	if (delta_idle > delta_time)
+	if ((delta_time == 0) || (delta_idle > delta_time))
 		load_since_change = 0;
 	else
 		load_since_change =
@@ -570,11 +576,18 @@ static ssize_t show_go_maxspeed_load(struct kobject *kobj,
 static ssize_t store_go_maxspeed_load(struct kobject *kobj,
 			struct attribute *attr, const char *buf, size_t count)
 {
-	return strict_strtoul(buf, 0, &go_maxspeed_load);
+	if (!strict_strtoul(buf, 0, &go_maxspeed_load))
+		return count;
+	return -EINVAL;
 }
 
+#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
 static struct global_attr go_maxspeed_load_attr = __ATTR(go_maxspeed_load, 0644,
 		show_go_maxspeed_load, store_go_maxspeed_load);
+#else
+static struct global_attr go_maxspeed_load_attr = __ATTR(go_maxspeed_load, 0666,
+		show_go_maxspeed_load, store_go_maxspeed_load);
+#endif
 
 static ssize_t show_boost_factor(struct kobject *kobj,
 				     struct attribute *attr, char *buf)
@@ -585,11 +598,36 @@ static ssize_t show_boost_factor(struct kobject *kobj,
 static ssize_t store_boost_factor(struct kobject *kobj,
 			struct attribute *attr, const char *buf, size_t count)
 {
-	return strict_strtoul(buf, 0, &boost_factor);
+	if (!strict_strtoul(buf, 0, &boost_factor))
+		return count;
+	return -EINVAL;
 }
 
 static struct global_attr boost_factor_attr = __ATTR(boost_factor, 0644,
 		show_boost_factor, store_boost_factor);
+
+static ssize_t show_max_boost(struct kobject *kobj,
+				     struct attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lu\n", max_boost);
+}
+
+static ssize_t store_max_boost(struct kobject *kobj,
+			struct attribute *attr, const char *buf, size_t count)
+{
+	if (!strict_strtoul(buf, 0, &max_boost))
+		return count;
+	return -EINVAL;
+}
+
+#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
+static struct global_attr max_boost_attr = __ATTR(max_boost, 0644,
+		show_max_boost, store_max_boost);
+#else
+static struct global_attr max_boost_attr = __ATTR(max_boost, 0666,
+		show_max_boost, store_max_boost);
+#endif
+
 
 static ssize_t show_sustain_load(struct kobject *kobj,
 				     struct attribute *attr, char *buf)
@@ -600,7 +638,9 @@ static ssize_t show_sustain_load(struct kobject *kobj,
 static ssize_t store_sustain_load(struct kobject *kobj,
 			struct attribute *attr, const char *buf, size_t count)
 {
-	return strict_strtoul(buf, 0, &sustain_load);
+	if (!strict_strtoul(buf, 0, &sustain_load))
+		return count;
+	return -EINVAL;
 }
 
 static struct global_attr sustain_load_attr = __ATTR(sustain_load, 0644,
@@ -615,7 +655,9 @@ static ssize_t show_min_sample_time(struct kobject *kobj,
 static ssize_t store_min_sample_time(struct kobject *kobj,
 			struct attribute *attr, const char *buf, size_t count)
 {
-	return strict_strtoul(buf, 0, &min_sample_time);
+	if (!strict_strtoul(buf, 0, &min_sample_time))
+		return count;
+	return -EINVAL;
 }
 
 static struct global_attr min_sample_time_attr = __ATTR(min_sample_time, 0644,
@@ -624,6 +666,7 @@ static struct global_attr min_sample_time_attr = __ATTR(min_sample_time, 0644,
 static struct attribute *interactive_attributes[] = {
 	&go_maxspeed_load_attr.attr,
 	&boost_factor_attr.attr,
+	&max_boost_attr.attr,
 	&sustain_load_attr.attr,
 	&min_sample_time_attr.attr,
 	NULL,
@@ -652,8 +695,15 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *new_policy,
 		pcpu->freq_change_time_in_idle =
 			get_cpu_idle_time_us(new_policy->cpu,
 					     &pcpu->freq_change_time);
+		pcpu->time_in_idle = pcpu->freq_change_time_in_idle;
+		pcpu->idle_exit_time = pcpu->freq_change_time;
+		pcpu->timer_idlecancel = 1;
 		pcpu->governor_enabled = 1;
 		smp_wmb();
+
+		if (!timer_pending(&pcpu->cpu_timer))
+			mod_timer(&pcpu->cpu_timer, jiffies + 2);
+
 		/*
 		 * Do not register the idle hook and create sysfs
 		 * entries if we have already done so.

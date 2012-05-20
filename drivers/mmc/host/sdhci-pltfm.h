@@ -25,4 +25,20 @@ extern struct sdhci_pltfm_data sdhci_esdhc_imx_pdata;
 extern struct sdhci_pltfm_data sdhci_dove_pdata;
 extern struct sdhci_pltfm_data sdhci_tegra_pdata;
 
+struct tegra_sdhci_host {
+	bool	clk_enabled;
+	struct regulator *vdd_io_reg;
+	struct regulator *vdd_slot_reg;
+	/* Pointer to the chip specific HW ops */
+	struct tegra_sdhci_hw_ops *hw_ops;
+	/* Host controller instance */
+	unsigned int instance;
+	/* vddio_min */
+	unsigned int vddio_min_uv;
+	/* vddio_max */
+	unsigned int vddio_max_uv;
+	/* max clk supported by the platform */
+	unsigned int max_clk_limit;
+};
+
 #endif /* _DRIVERS_MMC_SDHCI_PLTFM_H */

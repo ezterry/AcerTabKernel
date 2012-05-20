@@ -151,6 +151,7 @@ enum {
 	NV_CLASS_HOST_INCR_SYNCPT = 0x0,
 	NV_CLASS_HOST_WAIT_SYNCPT = 0x8,
 	NV_CLASS_HOST_WAIT_SYNCPT_BASE = 0x9,
+	NV_CLASS_HOST_LOAD_SYNCPT_BASE = 0xb,
 	NV_CLASS_HOST_INCR_SYNCPT_BASE = 0xc,
 	NV_CLASS_HOST_INDOFF = 0x2d,
 	NV_CLASS_HOST_INDDATA = 0x2e
@@ -164,6 +165,12 @@ enum {
 };
 
 static inline u32 nvhost_class_host_wait_syncpt(
+	unsigned indx, unsigned threshold)
+{
+	return (indx << 24) | (threshold & 0xffffff);
+}
+
+static inline u32 nvhost_class_host_load_syncpt_base(
 	unsigned indx, unsigned threshold)
 {
 	return (indx << 24) | (threshold & 0xffffff);
@@ -276,9 +283,11 @@ static inline u32 nvhost_mask2(unsigned x, unsigned y)
 int nvhost_drain_read_fifo(void __iomem *chan_regs,
 		u32 *ptr, unsigned int count, unsigned int *pending);
 
-/* Size of the sync queue. If it is too small, we won't be able to queue up
- * many command buffers. If it is too large, we waste memory. */
-#define NVHOST_SYNC_QUEUE_SIZE 8192
+/*
+ * Size of the sync queue. Size equals to case where all submits consist of
+ * only one gather.
+ */
+#define NVHOST_SYNC_QUEUE_SIZE 512
 
 /* Number of gathers we allow to be queued up per channel. Must be a
  * power of two. Currently sized such that pushbuffer is 4KB (512*8B). */
