@@ -2408,6 +2408,21 @@ static int check_modinfo(struct module *mod, struct load_info *info)
 		err = try_to_force_load(mod, "bad vermagic");
 		if (err)
 			return err;
+	} else if(strcmp(mod->name,"ufsd") == 0){
+		/*non-open source module will have wrong vermagic*/
+		const char *amagic = modmagic;
+		if(info->index.vers){ /*has crc*/
+			amagic += strcspn(amagic, " ");
+		}
+		if(strcmp(amagic,"2.6.39.4+ SMP preempt mod_unload ARMv7 ")==0){
+			printk(KERN_NOTICE "loading ufsd with stock vermagic: %s (may cause issues as it is not intended for this kernel)\n",modmagic);
+		}
+		else if (!same_magic(modmagic, vermagic, info->index.vers)) {
+			printk(KERN_ERR "%s: version magic '%s' should be '%s'\n",
+				mod->name, modmagic, vermagic);
+			return -ENOEXEC;
+		}
+
 	} else if (!same_magic(modmagic, vermagic, info->index.vers)) {
 		printk(KERN_ERR "%s: version magic '%s' should be '%s'\n",
 		       mod->name, modmagic, vermagic);
