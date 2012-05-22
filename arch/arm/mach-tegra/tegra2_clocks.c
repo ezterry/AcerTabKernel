@@ -1933,53 +1933,17 @@ static struct clk tegra_pll_u = {
 
 static struct clk_pll_freq_table tegra_pll_x_freq_table[] = {
 
-        /* 1.680 GHz */
-        { 12000000, 1680000000, 840, 6, 1, 12},
-        { 13000000, 1680000000, 905, 7, 1, 12},
-        { 19200000, 1680000000, 963, 11, 1, 8},
-        { 26000000, 1680000000, 840, 13, 1, 12},
+        /* 1.4 GHz */
+  	{ 12000000, 1400000000, 700, 6, 1, 12},
+ 	{ 13000000, 1400000000, 969, 9, 1, 12},
+ 	{ 19200000, 1400000000, 875, 12, 1, 8},
+	{ 26000000, 1400000000, 700, 13, 1, 12},
 
-	/* 1.624 GHz */
-	{ 12000000, 1624000000, 812, 6, 1, 12},
-        { 13000000, 1624000000, 999, 8, 1, 12},
-        { 19200000, 1624000000, 930, 11, 1, 8},
-        { 26000000, 1624000000, 812, 13, 1, 12},
-
-	/* 1.592 GHz */
-	{ 12000000, 1592000000, 796, 6, 1, 12},
-	{ 13000000, 1592000000, 980, 8, 1, 12},
-	{ 19200000, 1592000000, 995, 12, 1, 8},
-	{ 26000000, 1592000000, 796, 13, 1, 12},
-
-	/* 1.544 GHz */
-	{ 12000000, 1544000000, 772, 6, 1, 12},
-	{ 13000000, 1544000000, 950, 8, 1, 12},
-	{ 19200000, 1544000000, 965, 12, 1, 8},
-	{ 26000000, 1544000000, 772, 13, 1, 12},
-
-	/* 1.472 GHz */
-	{ 12000000, 1472000000, 736, 6, 1, 12},
-	{ 13000000, 1472000000, 906, 8, 1, 12},
-	{ 19200000, 1472000000, 920, 12, 1, 8},
-	{ 26000000, 1472000000, 736, 13, 1, 12},
-
-	/* 1.424 GHz */
-	{ 12000000, 1424000000, 712, 6, 1, 12},
-	{ 13000000, 1424000000, 986, 9, 1, 12},
-	{ 19200000, 1424000000, 890, 12, 1, 8},
-	{ 26000000, 1424000000, 712, 13, 1, 12},
-
-        /* 1.336 GHz */
-        { 12000000, 1336000000, 668,  6,  1, 12},
-        { 13000000, 1336000000, 925,  9, 1, 12},
-        { 19200000, 1336000000, 835,  12, 1, 8},
-        { 26000000, 1336000000, 668,  13, 1, 12},
-
-	/* 1.232 GHz */
-	{ 12000000, 1232000000, 616,  6,  1, 12},
-	{ 13000000, 1232000000, 853,  9, 1, 12},
-	{ 19200000, 1232000000, 770,  12, 1, 8},
-	{ 26000000, 1232000000, 616,  13, 1, 12},
+	/* 1.2 GHz */
+	{ 12000000, 1200000000, 600,  6,  1, 12},
+	{ 13000000, 1200000000, 923,  10, 1, 12},
+	{ 19200000, 1200000000, 750,  12, 1, 8},
+	{ 26000000, 1200000000, 600,  13, 1, 12},
 
 	/* 1 GHz */
 	{ 12000000, 1000000000, 1000, 12, 1, 12},
@@ -2038,7 +2002,7 @@ static struct clk tegra_pll_x = {
 	.ops       = &tegra_pll_ops,
 	.reg       = 0xe0,
 	.parent    = &tegra_clk_m,
-	.max_rate  = 1680000000,
+	.max_rate  = 1504000000,
 	.u.pll = {
 		.input_min = 2000000,
 		.input_max = 31000000,
@@ -2184,7 +2148,7 @@ static struct clk tegra_clk_cclk = {
 	.inputs	= mux_cclk,
 	.reg	= 0x20,
 	.ops	= &tegra_super_ops,
-	.max_rate = 1680000000,
+	.max_rate = 1504000000,
 };
 
 static struct clk tegra_clk_sclk = {
@@ -2192,7 +2156,7 @@ static struct clk tegra_clk_sclk = {
 	.inputs	= mux_sclk,
 	.reg	= 0x28,
 	.ops	= &tegra_super_ops,
-	.max_rate = 300000000,
+	.max_rate = 240000000,
 	.min_rate = 40000000,
 };
 
@@ -2200,7 +2164,7 @@ static struct clk tegra_clk_virtual_cpu = {
 	.name      = "cpu",
 	.parent    = &tegra_clk_cclk,
 	.ops       = &tegra_cpu_ops,
-	.max_rate  = 1680000000,
+	.max_rate  = 1504000000,
 	.u.cpu = {
 		.main      = &tegra_pll_x,
 		.backup    = &tegra_pll_p,
@@ -2211,7 +2175,7 @@ static struct clk tegra_clk_cop = {
 	.name      = "cop",
 	.parent    = &tegra_clk_sclk,
 	.ops       = &tegra_cop_ops,
-	.max_rate  = 300000000,
+	.max_rate  = 240000000,
 };
 
 static struct clk tegra_clk_hclk = {
@@ -2221,7 +2185,7 @@ static struct clk tegra_clk_hclk = {
 	.reg		= 0x30,
 	.reg_shift	= 4,
 	.ops		= &tegra_bus_ops,
-	.max_rate       = 300000000,
+	.max_rate       = 240000000,
 	.min_rate	= 36000000,
 };
 
@@ -2232,7 +2196,7 @@ static struct clk tegra_clk_pclk = {
 	.reg		= 0x30,
 	.reg_shift	= 0,
 	.ops		= &tegra_bus_ops,
-	.max_rate       = 150000000,
+	.max_rate       = 120000000,
 	.min_rate	= 36000000,
 };
 
@@ -2439,10 +2403,10 @@ struct clk tegra_list_periph_clks[] = {
 	PERIPH_CLK("sdmmc2",	"sdhci-tegra.1",	NULL,	9,	0x154,	0x31E,	52000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71), /* scales with voltage */
 	PERIPH_CLK("sdmmc3",	"sdhci-tegra.2",	NULL,	69,	0x1bc,	0x31E,	52000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71), /* scales with voltage */
 	PERIPH_CLK("sdmmc4",	"sdhci-tegra.3",	NULL,	15,	0x164,	0x31E,	52000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71), /* scales with voltage */
-	PERIPH_CLK("vcp",	"tegra-avp",		"vcp",	29,	0,	0x31E,	300000000, mux_clk_m, 			0),
-	PERIPH_CLK("bsea",	"tegra-avp",		"bsea",	62,	0,	0x31E,	300000000, mux_clk_m, 			0),
-	PERIPH_CLK("bsev",	"tegra-aes",		"bsev",	63,	0,	0x31E,  300000000, mux_clk_m, 			0),
-	PERIPH_CLK("vde",	"tegra-avp",		"vde",	61,	0x1c8,	0x31E,	300000000, mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71), /* scales with voltage and process_id */
+	PERIPH_CLK("vcp",	"tegra-avp",		"vcp",	29,	0,	0x31E,	250000000, mux_clk_m, 			0),
+	PERIPH_CLK("bsea",	"tegra-avp",		"bsea",	62,	0,	0x31E,	250000000, mux_clk_m, 			0),
+	PERIPH_CLK("bsev",	"tegra-aes",		"bsev",	63,	0,	0x31E,  250000000, mux_clk_m, 			0),
+	PERIPH_CLK("vde",	"tegra-avp",		"vde",	61,	0x1c8,	0x31E,	250000000, mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71), /* scales with voltage and process_id */
 	PERIPH_CLK("csite",	"csite",		NULL,	73,	0x1d4,	0x31E,	144000000, mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71), /* max rate ??? */
 	/* FIXME: what is la? */
 	PERIPH_CLK("la",	"la",			NULL,	76,	0x1f8,	0x31E,	26000000,  mux_pllp_pllc_pllm_clkm,	MUX | DIV_U71),
@@ -2462,8 +2426,8 @@ struct clk tegra_list_periph_clks[] = {
 	PERIPH_CLK("2d",	"2d",			NULL,	21,	0x15c,	0x31E,	300000000, mux_pllm_pllc_pllp_plla,	MUX | DIV_U71), /* scales with voltage and process_id */
 	PERIPH_CLK("vi",	"tegra_camera",		"vi",	20,	0x148,	0x31E,	150000000, mux_pllm_pllc_pllp_plla,	MUX | DIV_U71), /* scales with voltage and process_id */
 	PERIPH_CLK("vi_sensor",	"tegra_camera",		"vi_sensor",	20,	0x1a8,	0x31E,	150000000, mux_pllm_pllc_pllp_plla,	MUX | DIV_U71 | PERIPH_NO_RESET), /* scales with voltage and process_id */
-	PERIPH_CLK("epp",	"epp",			NULL,	19,	0x16c,	0x31E,	425000000, mux_pllm_pllc_pllp_plla,	MUX | DIV_U71), /* scales with voltage and process_id */
-	PERIPH_CLK("mpe",	"mpe",			NULL,	60,	0x170,	0x31E,	425000000, mux_pllm_pllc_pllp_plla,	MUX | DIV_U71), /* scales with voltage and process_id */
+	PERIPH_CLK("epp",	"epp",			NULL,	19,	0x16c,	0x31E,	300000000, mux_pllm_pllc_pllp_plla,	MUX | DIV_U71), /* scales with voltage and process_id */
+	PERIPH_CLK("mpe",	"mpe",			NULL,	60,	0x170,	0x31E,	300000000, mux_pllm_pllc_pllp_plla,	MUX | DIV_U71), /* scales with voltage and process_id */
 	PERIPH_CLK("host1x",	"host1x",		NULL,	28,	0x180,	0x31E,	166000000, mux_pllm_pllc_pllp_plla,	MUX | DIV_U71), /* scales with voltage and process_id */
 	PERIPH_CLK("cve",	"cve",			NULL,	49,	0x140,	0x31E,	250000000, mux_pllp_plld_pllc_clkm,	MUX | DIV_U71), /* requires min voltage */
 	PERIPH_CLK("tvo",	"tvo",			NULL,	49,	0x188,	0x31E,	250000000, mux_pllp_plld_pllc_clkm,	MUX | DIV_U71), /* requires min voltage */
@@ -2598,22 +2562,22 @@ struct clk *tegra_ptr_clks[] = {
 
 static struct tegra_sku_rate_limit sku_limits[] =
 {
-	RATE_LIMIT("cpu",	750000000, 0x07, 0x10),
-	RATE_LIMIT("cclk",	750000000, 0x07, 0x10),
-	RATE_LIMIT("pll_x",	750000000, 0x07, 0x10),
+	RATE_LIMIT("cpu",	1504000000, 0x07, 0x10),
+	RATE_LIMIT("cclk",	1504000000, 0x07, 0x10),
+	RATE_LIMIT("pll_x",	1504000000, 0x07, 0x10),
 
-	RATE_LIMIT("cpu",	1680000000, 0x04, 0x08, 0x0F),
-	RATE_LIMIT("cclk",	1680000000, 0x04, 0x08, 0x0F),
-	RATE_LIMIT("pll_x",	1680000000, 0x04, 0x08, 0x0F),
+	RATE_LIMIT("cpu",	1000000000, 0x04, 0x08, 0x0F),
+	RATE_LIMIT("cclk",	1000000000, 0x04, 0x08, 0x0F),
+	RATE_LIMIT("pll_x",	1000000000, 0x04, 0x08, 0x0F),
 
 	RATE_LIMIT("cpu",	1200000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 	RATE_LIMIT("cclk",	1200000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 	RATE_LIMIT("pll_x",	1200000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 
-	RATE_LIMIT("sclk",	300000000, 0x04, 0x7, 0x08, 0x0F, 0x10),
-	RATE_LIMIT("hclk",	300000000, 0x04, 0x7, 0x08, 0x0F, 0x10),
-	RATE_LIMIT("vde",	300000000, 0x04, 0x7, 0x08, 0x0F, 0x10),
-	RATE_LIMIT("3d",	450000000, 0x04, 0x7, 0x08, 0x0F, 0x10),
+	RATE_LIMIT("sclk",	240000000, 0x04, 0x7, 0x08, 0x0F, 0x10),
+	RATE_LIMIT("hclk",	240000000, 0x04, 0x7, 0x08, 0x0F, 0x10),
+	RATE_LIMIT("vde",	240000000, 0x04, 0x7, 0x08, 0x0F, 0x10),
+	RATE_LIMIT("3d",	300000000, 0x04, 0x7, 0x08, 0x0F, 0x10),
 
 	RATE_LIMIT("host1x",	108000000, 0x0F),
 
@@ -2621,9 +2585,8 @@ static struct tegra_sku_rate_limit sku_limits[] =
 	RATE_LIMIT("virt_sclk",	300000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 	RATE_LIMIT("hclk",	300000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 	RATE_LIMIT("pclk",	150000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
-	RATE_LIMIT("vde",	450000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
-	RATE_LIMIT("3d",	450000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
-    RATE_LIMIT("mpe",       450000000, 0x04, 0x7, 0x08, 0x0F, 0x10),
+	RATE_LIMIT("vde",	300000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
+	RATE_LIMIT("3d",	400000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 
 	RATE_LIMIT("uarta",	800000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
 	RATE_LIMIT("uartb",	800000000, 0x14, 0x17, 0x18, 0x1B, 0x1C),
@@ -2707,32 +2670,10 @@ static struct cpufreq_frequency_table freq_table_1p2GHz[] = {
 	{ 9, CPUFREQ_TABLE_END },
 };
 
-static struct cpufreq_frequency_table freq_table_1p6GHz[] = {
-	{ 0, 216000 },
-	{ 1, 312000 },
-	{ 2, 456000 },
-	{ 3, 608000 },
-	{ 4, 760000 },
-	{ 5, 816000 },
-	{ 6, 912000 },
-	{ 7, 1000000 },
-	{ 8, 1232000 },
-	{ 9, 1336000 },
-	{ 10, 1424000 },
-	{ 11, 1472000 },
-	{ 12, 1544000 },
-	{ 13, 1592000 },
-	{ 14, 1624000 },
-	{ 15, 1680000 },
-	{ 16, CPUFREQ_TABLE_END },
-
-};
-
 static struct tegra_cpufreq_table_data cpufreq_tables[] = {
 	{ freq_table_750MHz, 1, 4 },
 	{ freq_table_1p0GHz, 2, 6 },
 	{ freq_table_1p2GHz, 2, 7 },
-        { freq_table_1p6GHz, 2, 10 },
 };
 
 struct tegra_cpufreq_table_data *tegra_cpufreq_table_get(void)
