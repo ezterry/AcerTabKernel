@@ -43,7 +43,7 @@ static const int core_millivolts[MAX_DVFS_FREQS] =
 	{950, 1000, 1100, 1200, 1225, 1275, 1300, 1325};
 static const int cpu_millivolts[MAX_DVFS_FREQS] =
 #if defined(CONFIG_TEGRA_OVERCLOCK)
-	{750, 775, 800, 825, 850, 875, 900, 925, 950, 975, 1000, 1175, 1275, 1325 };
+	{750, 775, 800, 825, 850, 875, 900, 925, 950, 975, 1025, 1175, 1275, 1325 };
 #else
 	{750, 775, 800, 825, 850, 875, 900, 925, 950, 975, 1000, 1025, 1050, 1100, 1125};
 #endif
