@@ -210,6 +210,14 @@ static int dvfs_rail_set_voltage(struct dvfs_rail *rail, int millivolts)
 
 		if (!rail->disabled) {
 			rail->updating = true;
+			if(rail->new_millivolts > rail->max_millivolts){
+				/* prevents an instant reboot, and provides more verbose
+				 * logging
+				 */
+				printk(KERN_WARNING "dvfs: dvfs_rail_set_voltage(): New %s voltage (%d) is greater than max (%d), reduce to match\n",
+					rail->reg_id,rail->new_millivolts, rail->max_millivolts);
+				rail->new_millivolts=rail->max_millivolts;
+			}
 			ret = regulator_set_voltage(rail->reg,
 				rail->new_millivolts * 1000,
 				rail->max_millivolts * 1000);
