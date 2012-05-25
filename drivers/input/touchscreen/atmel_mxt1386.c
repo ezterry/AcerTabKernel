@@ -594,13 +594,12 @@ static void mxt_worker(struct work_struct *work)
 					mxt_debug(DEBUG_BASIC,
 						"Report Point[%d] Update: Status=%d X=%d Y=%d\n",
 						i, mxt->PointBuf[i].Status, mxt->PointBuf[i].X, mxt->PointBuf[i].Y);
-					if (mxt->PointBuf[i].Status > 0) {
-						input_report_abs(mxt->input, ABS_MT_TRACKING_ID, i);
-						input_report_abs(mxt->input, ABS_MT_TOUCH_MAJOR, mxt->PointBuf[i].Status);
-						input_report_abs(mxt->input, ABS_MT_POSITION_X, mxt->PointBuf[i].X);
-						input_report_abs(mxt->input, ABS_MT_POSITION_Y, mxt->PointBuf[i].Y);
-						input_report_abs(mxt->input, ABS_MT_PRESSURE, mxt->PointBuf[i].Status);
-					}
+
+					input_report_abs(mxt->input, ABS_MT_TRACKING_ID, i);
+					input_report_abs(mxt->input, ABS_MT_TOUCH_MAJOR, mxt->PointBuf[i].Status);
+					input_report_abs(mxt->input, ABS_MT_POSITION_X, mxt->PointBuf[i].X);
+					input_report_abs(mxt->input, ABS_MT_POSITION_Y, mxt->PointBuf[i].Y);
+					input_report_abs(mxt->input, ABS_MT_PRESSURE, mxt->PointBuf[i].Status);
 
 					input_mt_sync(mxt->input);
 
