@@ -461,7 +461,7 @@ static void handle_multi_touch(struct cyttsp_trk *cur_trk, struct cyttsp *ts)
 	 * is missing from the current event
 	 */
 	for (id = 0; id < CY_NUM_TRK_ID; id++) {
-		if (cur_trk[id].tch) {
+		if (cur_trk[id].tch && (cur_trk[id].z > 0)) {
 			/* put active current track data */
 			input_report_abs(ts->input,
 				ABS_MT_POSITION_X, cur_trk[id].x);
@@ -480,7 +480,7 @@ static void handle_multi_touch(struct cyttsp_trk *cur_trk, struct cyttsp *ts)
 			/* save current touch xy_data as previous track data */
 			ts->prv_trk[id] = cur_trk[id];
 			cnt++;
-		} else if (ts->prv_trk[id].tch) {
+		} else if (ts->prv_trk[id].tch && (cur_trk[id].z > 0)) {
 			/* put lift-off previous track data */
 			input_report_abs(ts->input,
 				ABS_MT_POSITION_X, ts->prv_trk[id].x);
@@ -505,6 +505,10 @@ static void handle_multi_touch(struct cyttsp_trk *cur_trk, struct cyttsp *ts)
 	/* signal the view motion event */
 	if (cnt)
 		input_sync(ts->input);
+	else {
+		input_mt_sync(ts->input);
+		input_sync(ts->input);
+	}
 }
 
 /* read xy_data for all current touches */
