@@ -44,7 +44,7 @@ static int __init early_initrd(char *p)
 	if (*endp == ',') {
 		size = memparse(endp + 1, NULL);
 
-		printk(KERN_NOTICE "early_initrd: %x, %x\n",start,size);
+		printk(KERN_NOTICE "early_initrd: %lx, %lx\n",start,size);
 
 		phys_initrd_start = start;
 		phys_initrd_size = size;
@@ -313,7 +313,7 @@ void __init arm_memblock_init(struct meminfo *mi, struct machine_desc *mdesc)
 		initrd_start = __phys_to_virt(phys_initrd_start);
 		initrd_end = initrd_start + phys_initrd_size;
 
-		printk(KERN_NOTICE "initrd phys: (0x%x,0x%x) vert: (0x%x,0x%x)/n",
+		printk(KERN_NOTICE "initrd phys: (0x%lx,0x%lx) vert: (0x%lx,0x%lx)/n",
 				phys_initrd_start,phys_initrd_start+phys_initrd_size,
 				initrd_start, initrd_end);
 	}

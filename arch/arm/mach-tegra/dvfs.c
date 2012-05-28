@@ -359,12 +359,18 @@ __tegra_dvfs_set_rate(struct dvfs *d, unsigned long rate)
 				" %s\n", d->millivolts[i], d->clk_name);
 			return -EINVAL;
 		}
-		if (strcmp(d->clk_name, "cpu") == 0)
+		/*This code is run quite offten so inline the string compare*/
+		if (d->clk_name[0] == 'c' && d->clk_name[1] == 'p' &&
+			d->clk_name[2] == 'u' && d->clk_name[3] == '\x00')
 		{
-			for (j = 0; j < FREQCOUNT; j++)
-				if (cpufrequency[j] == (rate / 1000)) break;
-			if (j < FREQCOUNT) mvoffset = cpuuvoffset[j];
-			else pr_warn("tegra_dvfs: failed to find undervolt amount for rate %lu\n", rate);
+			for (j = 0; j < FREQCOUNT; j++){
+				if (cpufrequency[j] == (rate / 1000))
+					break;
+			}
+			if (j < FREQCOUNT)
+				mvoffset = cpuuvoffset[j];
+			else
+				pr_warn("tegra_dvfs: failed to find undervolt amount for rate %lu\n", rate);
 		}
 
 		d->cur_millivolts = d->millivolts[i] - mvoffset;

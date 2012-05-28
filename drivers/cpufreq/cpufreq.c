@@ -39,7 +39,7 @@
 #if defined(CONFIG_TEGRA_OVERCLOCK)
 #define FREQCOUNT 11
 #else
-#define FREQCOUNT 10
+#define FREQCOUNT 9
 #endif
 
 #define CPUMVMAX 1400
@@ -47,16 +47,16 @@
 #if defined(CONFIG_TEGRA_OVERCLOCK)
 int cpufrequency[FREQCOUNT]  = { 216000, 312000, 456000, 608000, /*750000,*/ 760000, 816000, 912000, 1000000, 1200000, 1408000, 1504000 };
 #else
-int cpufrequency[FREQCOUNT]  = { 216000, 312000, 456000, 608000, 750000, 760000, 816000, 912000, 1000000, 1200000 };
+int cpufrequency[FREQCOUNT]  = { 216000, 312000, 456000, 608000, 750000, 760000, 816000, 912000, 1000000, /*1200000*/ };
 #endif
 
 #if defined(CONFIG_TEGRA_OVERCLOCK)
 int cpuvoltage[FREQCOUNT] = {750, 775, 800, 825, /*850,*/ 875, 900, 925, 950, 1025, 1175, 1275/*, 1325*/};
 #else
-int cpuvoltage[FREQCOUNT] = {750, 775, 800, 825, 850, 875, 900, 925, 950, 975, 1000, 1025, 1050, 1100, 1125};
+int cpuvoltage[FREQCOUNT] = {750, 775, 800, 825, 850, 875, 900, 925, 950, 975, /*1000, 1025, 1050, 1100, 1125*/};
 #endif
 
-int cpuuvoffset[FREQCOUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+int cpuuvoffset[15] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 , 0, 0};
 
 /**
  * The "cpufreq driver" - the arch- or hardware-dependent low
@@ -714,9 +714,9 @@ static ssize_t show_UV_mV_table(struct cpufreq_policy *policy, char *buf)
 
 static ssize_t store_UV_mV_table(struct cpufreq_policy *policy, char *buf, size_t count)
 {
-	int tmptable[FREQCOUNT];
+	int tmptable[15];
 	int i;
-	unsigned int ret = sscanf(buf, "%d %d %d %d %d %d %d %d %d %d %d %d %d", &tmptable[0], &tmptable[1], &tmptable[2], &tmptable[3], &tmptable[4], &tmptable[5], &tmptable[6], &tmptable[7], &tmptable[8], &tmptable[9], &tmptable[10], &tmptable[11], &tmptable[12]);
+	unsigned int ret = sscanf(buf, "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d", &tmptable[0], &tmptable[1], &tmptable[2], &tmptable[3], &tmptable[4], &tmptable[5], &tmptable[6], &tmptable[7], &tmptable[8], &tmptable[9], &tmptable[10], &tmptable[11], &tmptable[12], &tmptable[13], &tmptable[14]);
 	if (ret != FREQCOUNT){
         printk(KERN_INFO "UV_mV_table: Incorect item count: %d\n",ret);
 		return -EINVAL;
