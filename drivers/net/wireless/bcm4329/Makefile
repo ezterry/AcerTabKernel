@@ -41,6 +41,12 @@ ifeq ($(TARGET_USE_NEW_TOOLCHAIN),1)
   DHDCFLAGS += -Wno-error=array-bounds
 endif
 
+ifeq "$(shell $(CC) --version | grep gcc | sed 's/^.* //g')" "4.6.3"
+  # 4.6.3 toolchain has many false positives as above
+  DHDCFLAGS += -Wno-error=unused-but-set-variable
+  DHDCFLAGS += -Wno-error=array-bounds
+endif
+
 DHDOFILES = dhd_linux.o linux_osl.o bcmutils.o dhd_common.o dhd_custom_gpio.o \
 	wl_iw.o siutils.o sbutils.o aiutils.o hndpmu.o bcmwifi.o dhd_sdio.o   \
 	dhd_linux_sched.o dhd_cdc.o bcmsdh_sdmmc.o bcmsdh.o bcmsdh_linux.o    \
