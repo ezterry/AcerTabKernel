@@ -24,6 +24,7 @@
 *.order
 modules.builtin
 *.elf
+*.exe
 *.bin
 *.gz
 *.bz2
