@@ -164,15 +164,15 @@ if test "$CONFIG_LOCALVERSION_AUTO" = "y"; then
 	# full scm version string
 	res="$res$(scm_version)"
 else
-	# append a plus sign if the repository is not in a clean
+	# append a tilda sign if the repository is not in a clean
 	# annotated or signed tagged state (as git describe only
 	# looks at signed or annotated tags - git tag -a/-s) and
 	# LOCALVERSION= is not specified
 	if test "${LOCALVERSION+set}" != "set"; then
 		scm=$(scm_version --short)
-		# Fore the res to be "+" to fix the mismatch problem of prebuilt
+		# Fore the res to be "~" to fix the mismatch problem of prebuilt
 		# kernel module
-		res="$res+"
+		res="$res~"
 	fi
 fi
 
