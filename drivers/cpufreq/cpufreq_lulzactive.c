@@ -36,7 +36,7 @@
 #define LULZACTIVE_AUTHOR	"tegrak"
 
 // if you changed some codes for optimization, just write your name here.
-#define LULZACTIVE_TUNER ""
+#define LULZACTIVE_TUNER "ezterry"
 
 #define LOGI(fmt...) printk(KERN_INFO "[lulzactive] " fmt)
 #define LOGW(fmt...) printk(KERN_WARNING "[lulzactive] " fmt)
@@ -99,14 +99,14 @@ enum {
 /*
  * CPU freq will be increased if measured load > inc_cpu_load;
  */
-#define DEFAULT_INC_CPU_LOAD 60
+#define DEFAULT_INC_CPU_LOAD 70
 static unsigned long inc_cpu_load;
 
 /*
  * CPU freq will be decreased if measured load < dec_cpu_load;
  * not implemented yet.
  */
-#define DEFAULT_DEC_CPU_LOAD 30
+#define DEFAULT_DEC_CPU_LOAD 45
 static unsigned long dec_cpu_load;
 
 /*
@@ -128,6 +128,7 @@ static unsigned long pump_down_step;
  */
 static unsigned int suspending;
 static unsigned int early_suspended;
+static unsigned int gov_active;
 
 #define SCREEN_OFF_LOWEST_STEP 		(0xffffffff)
 #define DEFAULT_SCREEN_OFF_MIN_STEP	(SCREEN_OFF_LOWEST_STEP)
@@ -373,7 +374,7 @@ static void cpufreq_lulzactive_timer(unsigned long data)
 			}
 			
 			// apply pump_up_step by tegrak
-			index -= pump_up_step;
+			index += pump_up_step;
 			if (index < 0)
 				index = 0;
 			
@@ -416,7 +417,7 @@ static void cpufreq_lulzactive_timer(unsigned long data)
 			}
 			
 			// apply pump_down_step by tegrak
-			index += pump_down_step;
+			index -= pump_down_step;
 			if (index >= pcpu->freq_table_size) {
 				index = pcpu->freq_table_size - 1;
 			}
@@ -946,7 +947,7 @@ static int cpufreq_governor_lulzactive(struct cpufreq_policy *new_policy,
 		}
 		if (!cpu_online(new_policy->cpu))
 			return -EINVAL;
-
+		gov_active=1;
 		pcpu->policy = new_policy;
 		pcpu->freq_table = cpufreq_frequency_get_table(new_policy->cpu);
 		pcpu->target_freq = new_policy->cur;
@@ -980,6 +981,7 @@ static int cpufreq_governor_lulzactive(struct cpufreq_policy *new_policy,
 			LOGI("CPUFREQ_GOV_STOP\n");
 		}
 		pcpu->governor_enabled = 0;
+		gov_active =0;
 
 		if (atomic_dec_return(&active_count) > 0)
 			return 0;
@@ -1006,7 +1008,10 @@ static int cpufreq_governor_lulzactive(struct cpufreq_policy *new_policy,
 static void lulzactive_early_suspend(struct early_suspend *handler) {
 	struct cpufreq_lulzactive_cpuinfo *pcpu;
 	unsigned int min_freq, max_freq;
-	
+
+	if(!gov_active){
+		return;
+	}
 	early_suspended = 1;
 	
 	if (debug_mode & LULZACTIVE_DEBUG_EARLY_SUSPEND) {
@@ -1024,6 +1029,9 @@ static void lulzactive_early_suspend(struct early_suspend *handler) {
 }
 
 static void lulzactive_late_resume(struct early_suspend *handler) {
+	if(!gov_active){
+		return;
+	}
 	early_suspended = 0;
 	if (debug_mode & LULZACTIVE_DEBUG_EARLY_SUSPEND) {
 		LOGI("%s\n", __func__);
@@ -1104,6 +1112,7 @@ static int __init cpufreq_lulzactive_init(void)
 	pump_up_step = DEFAULT_PUMP_UP_STEP;
 	pump_down_step = DEFAULT_PUMP_DOWN_STEP;
 	early_suspended = 0;
+	gov_active=0;
 	suspending = 0;
 	screen_off_min_step = DEFAULT_SCREEN_OFF_MIN_STEP;
 
