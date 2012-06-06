@@ -639,6 +639,8 @@ static int tegra_cpu_init(struct cpufreq_policy *policy)
 	cpufreq_frequency_table_get_attr(freq_table, policy->cpu);
 
 #ifdef CONFIG_TEGRA_CPU_FREQ_SET_MIN_MAX
+	printk(KERN_INFO "update MIN/MAX %lx/%lx\n",CONFIG_TEGRA_CPU_FREQ_MIN,
+							CONFIG_TEGRA_CPU_FREQ_MAX);
 	if (cpufreq_frequency_table_cpuinfo(policy, freq_table)) {
 		policy->cpuinfo.min_freq = CONFIG_TEGRA_CPU_FREQ_MIN;
 		policy->cpuinfo.max_freq = CONFIG_TEGRA_CPU_FREQ_MAX;
