@@ -502,3 +502,9 @@ config TEGRA_WDT_RECOVERY
 	  suspend/resume hangs.
 endif
 
+config TEGRA2_LINK_CPU_GOVERNORS
+       bool "Tegra2 - Link CPU Governors"
+       default y
+	   depends on ARCH_TEGRA_2x_SOC
+	   help
+	     Force the scaling governor on both cores to stay in sync
