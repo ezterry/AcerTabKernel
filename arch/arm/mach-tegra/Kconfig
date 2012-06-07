@@ -523,3 +523,10 @@ config TEGRA_CPU_FREQ_MIN
         int "Min CPU Frequency"
         depends on TEGRA_CPU_FREQ_SET_MIN_MAX
         default 216000
+
+config TEGRA2_LINK_CPU_GOVERNORS
+       bool "Tegra2 - Link CPU Governors"
+       default y
+	   depends on ARCH_TEGRA_2x_SOC
+	   help
+	     Force the scaling governor on both cores to stay in sync

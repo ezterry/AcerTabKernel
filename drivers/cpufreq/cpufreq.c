@@ -573,6 +573,21 @@ static ssize_t store_scaling_governor(struct cpufreq_policy *policy,
 	policy->user_policy.policy = policy->policy;
 	policy->user_policy.governor = policy->governor;
 
+#ifdef CONFIG_TEGRA2_LINK_CPU_GOVERNORS
+	ret = cpufreq_get_policy(&new_policy, policy->cpu ? 0 : 1);
+	if(!ret){
+		struct cpufreq_policy* cpu_alt=cpufreq_cpu_get(policy->cpu ? 0 : 1);
+		if(cpu_alt != NULL){
+			cpufreq_parse_governor(str_governor, &new_policy.policy,
+									&new_policy.governor);
+			__cpufreq_set_policy(cpu_alt, &new_policy);
+			cpu_alt->user_policy.policy = cpu_alt->policy;
+			cpu_alt->user_policy.governor = cpu_alt->governor;
+			cpufreq_cpu_put(cpu_alt);
+		}
+	}
+#endif
+
 	if (ret)
 		return ret;
 	else
