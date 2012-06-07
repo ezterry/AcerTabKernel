@@ -1,7 +1,7 @@
 #
 # Automatically generated make config: don't edit
 # Linux/arm 2.6.39.4 Kernel Configuration
-# Wed Jun  6 15:09:41 2012
+# Wed Jun  6 23:16:23 2012
 #
 CONFIG_ARM=y
 CONFIG_HAVE_PWM=y
@@ -349,6 +349,7 @@ CONFIG_TEGRA_USB_MODEM_POWER=y
 CONFIG_TEGRA_CPU_FREQ_SET_MIN_MAX=y
 CONFIG_TEGRA_CPU_FREQ_MAX=1000000
 CONFIG_TEGRA_CPU_FREQ_MIN=216000
+CONFIG_TEGRA2_LINK_CPU_GOVERNORS=y
 
 #
 # Processor Type
