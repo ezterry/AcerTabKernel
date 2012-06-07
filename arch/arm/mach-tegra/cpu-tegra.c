@@ -618,8 +618,7 @@ static struct notifier_block tegra_cpu_pm_notifier = {
 };
 
 #ifdef CONFIG_TEGRA_CPU_FREQ_SET_MIN_MAX
-unsigned long cpu_minmax_curmax[]={CONFIG_TEGRA_CPU_FREQ_MAX,CONFIG_TEGRA_CPU_FREQ_MAX};
-unsigned long cpu_minmax_curmin[]={CONFIG_TEGRA_CPU_FREQ_MIN,CONFIG_TEGRA_CPU_FREQ_MIN};
+unsigned short cpu_minmax_configured[]={0,0};
 #endif
 
 static int tegra_cpu_init(struct cpufreq_policy *policy)
@@ -644,16 +643,30 @@ static int tegra_cpu_init(struct cpufreq_policy *policy)
 	cpufreq_frequency_table_get_attr(freq_table, policy->cpu);
 
 #ifdef CONFIG_TEGRA_CPU_FREQ_SET_MIN_MAX
-	if(likely(policy->cpu < 2)){
+	if((policy->cpu < 2) && (!cpu_minmax_configured[policy->cpu])){
 		printk(KERN_INFO "update MIN/MAX %ld/%ld\n",
-							cpu_minmax_curmin[policy->cpu],
-							cpu_minmax_curmax[policy->cpu]);
+							(long)CONFIG_TEGRA_CPU_FREQ_MIN,
+							(long)CONFIG_TEGRA_CPU_FREQ_MAX);
 		if (cpufreq_frequency_table_cpuinfo(policy, freq_table)) {
-			policy->cpuinfo.min_freq = cpu_minmax_curmin[policy->cpu];
-			policy->cpuinfo.max_freq = cpu_minmax_curmax[policy->cpu];
+			policy->cpuinfo.min_freq = CONFIG_TEGRA_CPU_FREQ_MIN;
+			policy->cpuinfo.max_freq = CONFIG_TEGRA_CPU_FREQ_MAX;
 		}
-		policy->min = cpu_minmax_curmin[policy->cpu];
-		policy->max = cpu_minmax_curmax[policy->cpu];
+		policy->min = CONFIG_TEGRA_CPU_FREQ_MIN;
+		policy->max = CONFIG_TEGRA_CPU_FREQ_MAX;
+        cpu_minmax_configured[policy->cpu] = 1;
+	}
+	else if(policy->cpu == 1){
+		struct cpufreq_policy* cpu0 = cpufreq_cpu_get(0);
+		if(cpu0){
+			if (cpufreq_frequency_table_cpuinfo(policy, freq_table)) {
+				policy->cpuinfo.min_freq = cpu0->cpuinfo.min_freq;
+				policy->cpuinfo.max_freq = cpu0->cpuinfo.max_freq;
+			}
+			policy->min = cpu0->min;
+			policy->max = cpu0->max;
+			cpufreq_cpu_put(cpu0);
+			printk(KERN_INFO "reload CPU1: from cpu0\n");
+		}
 	}
 #endif
 	policy->cur = tegra_getspeed(policy->cpu);
@@ -675,12 +688,6 @@ static int tegra_cpu_init(struct cpufreq_policy *policy)
 static int tegra_cpu_exit(struct cpufreq_policy *policy)
 {
 	cpufreq_frequency_table_cpuinfo(policy, freq_table);
-#ifdef CONFIG_TEGRA_CPU_FREQ_SET_MIN_MAX
-	if(likely(policy->cpu < 2)){
-		cpu_minmax_curmin[policy->cpu] = policy->min;
-		cpu_minmax_curmax[policy->cpu] = policy->max;
-	}
-#endif
 	clk_disable(emc_clk);
 	clk_put(emc_clk);
 	clk_put(cpu_clk);
