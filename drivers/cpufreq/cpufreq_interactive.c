@@ -27,8 +27,8 @@
 #include <linux/kthread.h>
 
 #include <asm/cputime.h>
+#include <asm/idle.h>
 
-static void (*pm_idle_old)(void);
 static atomic_t active_count = ATOMIC_INIT(0);
 
 struct cpufreq_interactive_cpuinfo {
@@ -377,94 +377,101 @@ exit:
 	return;
 }
 
-static void cpufreq_interactive_idle(void)
+static int cpufreq_interactive_idle_event(
+		struct notifier_block *this,
+		unsigned long event, void *ptr)
 {
 	struct cpufreq_interactive_cpuinfo *pcpu =
 		&per_cpu(cpuinfo, smp_processor_id());
 	int pending;
 
 	if (!pcpu->governor_enabled) {
-		pm_idle_old();
-		return;
+		return NOTIFY_DONE;
 	}
 
-	pcpu->idling = 1;
-	smp_wmb();
-	pending = timer_pending(&pcpu->cpu_timer);
+	if(event == IDLE_START){
+		pcpu->idling = 1;
+		smp_wmb();
+		pending = timer_pending(&pcpu->cpu_timer);
 
-	if (pcpu->target_freq != pcpu->policy->min) {
+		if (pcpu->target_freq != pcpu->policy->min) {
 #ifdef CONFIG_SMP
+			/*
+			 * Entering idle while not at lowest speed.  On some
+			 * platforms this can hold the other CPU(s) at that speed
+			 * even though the CPU is idle. Set a timer to re-evaluate
+			 * speed so this idle CPU doesn't hold the other CPUs above
+			 * min indefinitely.  This should probably be a quirk of
+			 * the CPUFreq driver.
+			 */
+			if (!pending) {
+				pcpu->time_in_idle = get_cpu_idle_time_us(
+					smp_processor_id(), &pcpu->idle_exit_time);
+				pcpu->timer_idlecancel = 0;
+				mod_timer(&pcpu->cpu_timer, jiffies + 2);
+				dbgpr("idle: enter at %d, set timer for %lu exit=%llu\n",
+				        pcpu->target_freq, pcpu->cpu_timer.expires,
+				        pcpu->idle_exit_time);
+			}
+#endif
+		} else {
+			/*
+			 * If at min speed and entering idle after load has
+			 * already been evaluated, and a timer has been set just in
+			 * case the CPU suddenly goes busy, cancel that timer.  The
+			 * CPU didn't go busy; we'll recheck things upon idle exit.
+			 */
+			if (pending && pcpu->timer_idlecancel) {
+				dbgpr("idle: cancel timer for %lu\n", pcpu->cpu_timer.expires);
+				del_timer(&pcpu->cpu_timer);
+				/*
+				 * Ensure last timer run time is after current idle
+				 * sample start time, so next idle exit will always
+				 * start a new idle sampling period.
+				 */
+				pcpu->idle_exit_time = 0;
+				pcpu->timer_idlecancel = 0;
+			}
+		}
+	}
+	if(event == IDLE_END){
+		pcpu->idling = 0;
+		smp_wmb();
+
 		/*
-		 * Entering idle while not at lowest speed.  On some
-		 * platforms this can hold the other CPU(s) at that speed
-		 * even though the CPU is idle. Set a timer to re-evaluate
-		 * speed so this idle CPU doesn't hold the other CPUs above
-		 * min indefinitely.  This should probably be a quirk of
-		 * the CPUFreq driver.
+		 * Arm the timer for 1-2 ticks later if not already, and if the timer
+		 * function has already processed the previous load sampling
+		 * interval.  (If the timer is not pending but has not processed
+		 * the previous interval, it is probably racing with us on another
+		 * CPU.  Let it compute load based on the previous sample and then
+		 * re-arm the timer for another interval when it's done, rather
+		 * than updating the interval start time to be "now", which doesn't
+		 * give the timer function enough time to make a decision on this
+		 * run.)
 		 */
-		if (!pending) {
-			pcpu->time_in_idle = get_cpu_idle_time_us(
-				smp_processor_id(), &pcpu->idle_exit_time);
+		if (timer_pending(&pcpu->cpu_timer) == 0 &&
+		    pcpu->timer_run_time >= pcpu->idle_exit_time &&
+		    pcpu->governor_enabled) {
+			pcpu->time_in_idle =
+				get_cpu_idle_time_us(smp_processor_id(),
+						     &pcpu->idle_exit_time);
 			pcpu->timer_idlecancel = 0;
 			mod_timer(&pcpu->cpu_timer, jiffies + 2);
-			dbgpr("idle: enter at %d, set timer for %lu exit=%llu\n",
-			      pcpu->target_freq, pcpu->cpu_timer.expires,
-			      pcpu->idle_exit_time);
-		}
-#endif
-	} else {
-		/*
-		 * If at min speed and entering idle after load has
-		 * already been evaluated, and a timer has been set just in
-		 * case the CPU suddenly goes busy, cancel that timer.  The
-		 * CPU didn't go busy; we'll recheck things upon idle exit.
-		 */
-		if (pending && pcpu->timer_idlecancel) {
-			dbgpr("idle: cancel timer for %lu\n", pcpu->cpu_timer.expires);
-			del_timer(&pcpu->cpu_timer);
-			/*
-			 * Ensure last timer run time is after current idle
-			 * sample start time, so next idle exit will always
-			 * start a new idle sampling period.
-			 */
-			pcpu->idle_exit_time = 0;
-			pcpu->timer_idlecancel = 0;
-		}
-	}
-
-	pm_idle_old();
-	pcpu->idling = 0;
-	smp_wmb();
-
-	/*
-	 * Arm the timer for 1-2 ticks later if not already, and if the timer
-	 * function has already processed the previous load sampling
-	 * interval.  (If the timer is not pending but has not processed
-	 * the previous interval, it is probably racing with us on another
-	 * CPU.  Let it compute load based on the previous sample and then
-	 * re-arm the timer for another interval when it's done, rather
-	 * than updating the interval start time to be "now", which doesn't
-	 * give the timer function enough time to make a decision on this
-	 * run.)
-	 */
-	if (timer_pending(&pcpu->cpu_timer) == 0 &&
-	    pcpu->timer_run_time >= pcpu->idle_exit_time &&
-	    pcpu->governor_enabled) {
-		pcpu->time_in_idle =
-			get_cpu_idle_time_us(smp_processor_id(),
-					     &pcpu->idle_exit_time);
-		pcpu->timer_idlecancel = 0;
-		mod_timer(&pcpu->cpu_timer, jiffies + 2);
-		dbgpr("idle: exit, set timer for %lu exit=%llu\n", pcpu->cpu_timer.expires, pcpu->idle_exit_time);
+			dbgpr("idle: exit, set timer for %lu exit=%llu\n", pcpu->cpu_timer.expires, pcpu->idle_exit_time);
 #if DEBUG
-	} else if (timer_pending(&pcpu->cpu_timer) == 0 &&
-		   pcpu->timer_run_time < pcpu->idle_exit_time) {
-		dbgpr("idle: timer not run yet: exit=%llu tmrrun=%llu\n",
-		      pcpu->idle_exit_time, pcpu->timer_run_time);
+		} else if (timer_pending(&pcpu->cpu_timer) == 0 &&
+			   pcpu->timer_run_time < pcpu->idle_exit_time) {
+			dbgpr("idle: timer not run yet: exit=%llu tmrrun=%llu\n",
+			      pcpu->idle_exit_time, pcpu->timer_run_time);
 #endif
+		}
 	}
-
+	return NOTIFY_DONE;
 }
+
+static struct notifier_block cpufreq_interactive_idle = {
+	.notifier_call = cpufreq_interactive_idle_event,
+};
 
 static int cpufreq_interactive_up_task(void *data)
 {
@@ -716,8 +723,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *new_policy,
 		if (rc)
 			return rc;
 
-		pm_idle_old = pm_idle;
-		pm_idle = cpufreq_interactive_idle;
+		idle_notifier_register(&cpufreq_interactive_idle);
 		break;
 
 	case CPUFREQ_GOV_STOP:
@@ -739,7 +745,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *new_policy,
 		sysfs_remove_group(cpufreq_global_kobject,
 				&interactive_attr_group);
 
-		pm_idle = pm_idle_old;
+		idle_notifier_unregister(&cpufreq_interactive_idle);
 		break;
 
 	case CPUFREQ_GOV_LIMITS:
