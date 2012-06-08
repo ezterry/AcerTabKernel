@@ -38,6 +38,7 @@
 #include <asm/thread_notify.h>
 #include <asm/stacktrace.h>
 #include <asm/mach/time.h>
+#include <asm/idle.h>
 
 #ifdef CONFIG_CC_STACKPROTECTOR
 #include <linux/stackprotector.h>
@@ -170,6 +171,20 @@ static void default_idle(void)
 void (*pm_idle)(void) = default_idle;
 EXPORT_SYMBOL(pm_idle);
 
+static ATOMIC_NOTIFIER_HEAD(arm_idle_notifier);
+
+void idle_notifier_register(struct notifier_block *n)
+{
+	atomic_notifier_chain_register(&arm_idle_notifier, n);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_register);
+
+void idle_notifier_unregister(struct notifier_block *n)
+{
+	atomic_notifier_chain_unregister(&arm_idle_notifier, n);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_unregister);
+
 /*
  * The idle thread, has rather strange semantics for calling pm_idle,
  * but this is what x86 does and we need to do the same, so that
@@ -194,7 +209,11 @@ void cpu_idle(void)
 			if (hlt_counter) {
 				local_irq_enable();
 				cpu_relax();
+				atomic_notifier_call_chain(&arm_idle_notifier,
+				                           IDLE_RELAX, NULL);
 			} else {
+				atomic_notifier_call_chain(&arm_idle_notifier,
+				                           IDLE_START, NULL);
 				stop_critical_timings();
 				pm_idle();
 				start_critical_timings();
@@ -205,6 +224,8 @@ void cpu_idle(void)
 				 */
 				WARN_ON(irqs_disabled());
 				local_irq_enable();
+
+				atomic_notifier_call_chain(&arm_idle_notifier, IDLE_END, NULL);
 			}
 		}
 		leds_event(led_idle_end);
