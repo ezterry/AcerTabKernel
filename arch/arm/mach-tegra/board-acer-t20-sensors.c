@@ -305,7 +305,11 @@ static int yuv5_sensor_power_on(void)
 	gpio_direction_output(CAMERA_POWER_GPIO, 1);
 	msleep(1);
 	gpio_direction_output(CAM1_RST, 1);
+#ifdef CONFIG_MACH_VANGOGH
 	msleep(1);
+#else
+	msleep(21);
+#endif
 
 	return 0;
 }
