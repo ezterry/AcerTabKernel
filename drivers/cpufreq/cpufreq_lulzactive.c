@@ -270,6 +270,14 @@ static inline unsigned int adjust_screen_off_freq(
 	return freq;
 }
 
+/* Sometimes we are trapped in a spinlock;
+ * As we are using a timer when this occors we can
+ * simply re-try next cycle; thus here we define how
+ * long to spin before giving up
+ */
+
+#define MAX_LOCKACQUIRE_ATTEMPTS 10240
+
 static void cpufreq_lulzactive_timer(unsigned long data)
 {
 	// do not step down if up scaling was stucked by short sampling time by tegrak
@@ -279,6 +287,7 @@ static void cpufreq_lulzactive_timer(unsigned long data)
 	unsigned int delta_time;
 	int cpu_load;
 	int load_since_change;
+	unsigned int lock_attempts;
 	u64 time_in_idle;
 	u64 idle_exit_time;
 	struct cpufreq_lulzactive_cpuinfo *pcpu =
@@ -502,20 +511,42 @@ static void cpufreq_lulzactive_timer(unsigned long data)
 	stuck_on_sampling = 0;
 	
 	if (new_freq < pcpu->target_freq) {
-		pcpu->target_freq = new_freq;
-		spin_lock(&down_cpumask_lock);
-		cpumask_set_cpu(data, &down_cpumask);
-		spin_unlock(&down_cpumask_lock);
-		queue_work(down_wq, &freq_scale_down_work);
+		lock_attempts=0;
+		while(lock_attempts<MAX_LOCKACQUIRE_ATTEMPTS){
+			if(likely(spin_trylock(&down_cpumask_lock))){
+				pcpu->target_freq = new_freq;
+				cpumask_set_cpu(data, &down_cpumask);
+				spin_unlock(&down_cpumask_lock);
+				queue_work(down_wq, &freq_scale_down_work);
+				break;
+			} else{
+				lock_attempts++;
+				if(lock_attempts == MAX_LOCKACQUIRE_ATTEMPTS){
+					printk(KERN_ERR "lulzactive: timer spinlock [down] failed in %d attempts\n",MAX_LOCKACQUIRE_ATTEMPTS);
+					goto rearm;
+				}
+			}
+		}
 	} else {
-		pcpu->target_freq = new_freq;
 #if DEBUG
 		up_request_time = ktime_to_us(ktime_get());
 #endif
-		spin_lock(&up_cpumask_lock);
-		cpumask_set_cpu(data, &up_cpumask);
-		spin_unlock(&up_cpumask_lock);
-		wake_up_process(up_task);
+		lock_attempts=0;
+		while(lock_attempts<MAX_LOCKACQUIRE_ATTEMPTS){
+			if(likely(spin_trylock(&up_cpumask_lock))){
+				pcpu->target_freq = new_freq;
+				cpumask_set_cpu(data, &up_cpumask);
+				spin_unlock(&up_cpumask_lock);
+				wake_up_process(up_task);
+				break;
+			} else {
+				lock_attempts++;
+				if(lock_attempts == MAX_LOCKACQUIRE_ATTEMPTS){
+					printk(KERN_ERR "lulzactive: timer spinlock [up] failed in %d attempts\n",MAX_LOCKACQUIRE_ATTEMPTS);
+					goto rearm;
+				}
+			}
+		}
 	}
 
 rearm_if_notmax:
