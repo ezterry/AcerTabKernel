@@ -496,6 +496,21 @@ static void acer_dock_init(void)
 }
 #endif
 
+
+#ifdef CONFIG_SIMDETECT
+static struct gpio_switch_platform_data simdetect_switch_platform_data = {
+        .gpio = TEGRA_GPIO_PI7,
+};
+
+static struct platform_device picasso_simdetect_switch = {
+        .name   = "simdetect",
+        .id     = -1,
+        .dev    = {
+                .platform_data  = &simdetect_switch_platform_data,
+        },
+};
+#endif
+
 static struct platform_device tegra_camera = {
 	.name = "tegra_camera",
 	.id = -1,
@@ -846,6 +861,10 @@ static void ventana_usb_init(void)
 		platform_device_register(&tegra_ehci2_device);
 #endif
 
+#ifdef CONFIG_SIMDETECT
+		platform_device_register(&picasso_simdetect_switch);
+#endif
+
 #if !defined(CONFIG_MACH_VANGOGH)
 	tegra_ehci3_device.dev.platform_data=&tegra_ehci_pdata[2];
 	platform_device_register(&tegra_ehci3_device);
@@ -966,7 +985,10 @@ static void __init acer_t20_init(void)
 	ventana_bt_rfkill();
 	ventana_power_off_init();
 	acer_t20_emc_init();
-
+#ifdef CONFIG_SIMDETECT
+        // enable gpio for sim detection
+        tegra_gpio_enable(TEGRA_GPIO_PI7);
+#endif
 	ventana_setup_bluesleep();
 #if defined(CONFIG_ACER_VIBRATOR)
 	vib_init();

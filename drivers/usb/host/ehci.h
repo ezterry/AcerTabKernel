@@ -137,6 +137,7 @@ struct ehci_hcd {			/* one per controller */
 	unsigned		use_dummy_qh:1;	/* AMD Frame List table quirk*/
 #ifdef CONFIG_USB_EHCI_TEGRA
 	unsigned		controller_resets_phy:1;
+	unsigned		controller_remote_wakeup:1;
 #endif
 
 	/* required for usb32 quirk */

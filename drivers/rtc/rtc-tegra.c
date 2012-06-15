@@ -107,14 +107,14 @@ retry_failed:
 static int tegra_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	struct tegra_rtc_info *info = dev_get_drvdata(dev);
-	unsigned long sec, msec;
+	unsigned long sec;
 	unsigned long sl_irq_flags;
 
 	/* RTC hardware copies seconds to shadow seconds when a read
 	 * of milliseconds occurs. use a lock to keep other threads out. */
 	spin_lock_irqsave(&info->tegra_rtc_lock, sl_irq_flags);
 
-	msec = readl(info->rtc_base + TEGRA_RTC_REG_MILLI_SECONDS);
+	readl(info->rtc_base + TEGRA_RTC_REG_MILLI_SECONDS);
 	sec = readl(info->rtc_base + TEGRA_RTC_REG_SHADOW_SECONDS);
 
 	spin_unlock_irqrestore(&info->tegra_rtc_lock, sl_irq_flags);
