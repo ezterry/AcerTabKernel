@@ -53,6 +53,7 @@
 
 #undef DEBUG
 #undef VERBOSE_DEBUG
+#define USE_ERICSSON_WAKEUP_CMD 1
 
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -73,6 +74,9 @@
 
 #include "cdc-acm.h"
 
+#define IOC_MAGIC 'd'
+#define IOCTL_ENABLE_FD    _IO(IOC_MAGIC, 1)
+#define IOCTL_DISABLE_FD   _IO(IOC_MAGIC, 2)
 
 #define ACM_CLOSE_TIMEOUT	15	/* seconds to let writes drain */
 
@@ -94,10 +98,30 @@ static DEFINE_MUTEX(open_mutex);
 static const struct tty_port_operations acm_port_ops = {
 };
 
+static unsigned int enable_fd = 0;
+
 #ifdef VERBOSE_DEBUG
 #define verbose	1
 #else
 #define verbose	0
+#endif
+
+#ifdef DEBUG2
+#define dbg2(...) printk(KERN_DEBUG __VA_ARGS__ )
+void at_dump(char *tag, int channel, const unsigned char *buffer, unsigned int len)
+{
+	static unsigned char buf_str[512];
+	int i,j;
+	j = 0;
+	for(i = 0; i < len && j < 510; i++)
+		switch(buffer[i]) {
+			case '\r': buf_str[j++] = '\\'; buf_str[j++] = 'r'; break;
+			case '\n': buf_str[j++] = '\\'; buf_str[j++] = 'n'; break;
+			default: buf_str[j++] = buffer[i]; break;
+		}
+	buf_str[j] = '\0';
+	dbg2("%s%d:%s", tag, channel, buf_str);
+}
 #endif
 
 /*
@@ -202,6 +226,9 @@ static int acm_write_start(struct acm *acm, int wbn)
 	unsigned long flags;
 	struct acm_wb *wb = &acm->wb[wbn];
 	int rc;
+#ifdef CONFIG_PM
+	struct urb *res;
+#endif
 
 	spin_lock_irqsave(&acm->write_lock, flags);
 	if (!acm->dev) {
@@ -214,23 +241,32 @@ static int acm_write_start(struct acm *acm, int wbn)
 	usb_autopm_get_interface_async(acm->control);
 	if (acm->susp_count) {
 #ifdef CONFIG_PM
-		printk("%s buffer urb\n", __func__);
 		acm->transmitting++;
 		wb->urb->transfer_buffer = wb->buf;
 		wb->urb->transfer_dma = wb->dmah;
 		wb->urb->transfer_buffer_length = wb->len;
 		wb->urb->dev = acm->dev;
 		usb_anchor_urb(wb->urb, &acm->deferred);
-#endif
+#else
 		if (!acm->delayed_wb)
 			acm->delayed_wb = wb;
 		else
 			usb_autopm_put_interface_async(acm->control);
+#endif
 		spin_unlock_irqrestore(&acm->write_lock, flags);
 		return 0;	/* A white lie */
 	}
 	usb_mark_last_busy(acm->dev);
-
+#ifdef CONFIG_PM
+	while ((res = usb_get_from_anchor(&acm->deferred))) {
+		rc = usb_submit_urb(res, GFP_ATOMIC);
+		if (rc < 0) {
+			dbg("usb_submit_urb(pending request) failed: %d", rc);
+			usb_unanchor_urb(res);
+			acm_write_done(acm, res->context);
+		}
+	}
+#endif
 	rc = acm_start_wb(acm, wb);
 	spin_unlock_irqrestore(&acm->write_lock, flags);
 
@@ -403,10 +439,18 @@ static void acm_rx_tasklet(unsigned long _acm)
 	unsigned char throttled;
 	int copied;
 
+#ifdef DEBUG2
+	dbg2("ACM%d Entering acm_rx_tasklet", acm->minor);
+#else
 	dbg("Entering acm_rx_tasklet");
+#endif
 
 	if (!ACM_READY(acm)) {
+#ifdef DEBUG2
+		dbg2("ACM%d acm_rx_tasklet: ACM not ready", acm->minor);
+#else
 		dbg("acm_rx_tasklet: ACM not ready");
+#endif
 		return;
 	}
 
@@ -414,7 +458,11 @@ static void acm_rx_tasklet(unsigned long _acm)
 	throttled = acm->throttle;
 	spin_unlock_irqrestore(&acm->throttle_lock, flags);
 	if (throttled) {
+#ifdef DEBUG2
+		dbg2("ACM%d acm_rx_tasklet: throttled", acm->minor);
+#else
 		dbg("acm_rx_tasklet: throttled");
+#endif
 		return;
 	}
 
@@ -431,7 +479,11 @@ next_buffer:
 	list_del(&buf->list);
 	spin_unlock_irqrestore(&acm->read_lock, flags);
 
+#ifdef DEBUG2
+	dbg2("ACM%d acm_rx_tasklet: procesing buf 0x%p, size = %d", acm->minor, buf, buf->size);
+#else
 	dbg("acm_rx_tasklet: procesing buf 0x%p, size = %d", buf, buf->size);
+#endif
 
 	copied = 0;
 	if (tty) {
@@ -441,6 +493,9 @@ next_buffer:
 		if (!throttled) {
 			copied = tty_insert_flip_string(tty, buf->base,
 				buf->size);
+#ifdef DEBUG2
+			at_dump("rx", acm->minor, buf->base, buf->size);
+#endif
 			tty_flip_buffer_push(tty);
 			if (copied != buf->size)
 				dbg("%s: copied %d != buf->size %d!!!!!!\n",
@@ -450,7 +505,11 @@ next_buffer:
 					__func__, copied, buf->size);
 		} else {
 			tty_kref_put(tty);
+#ifdef DEBUG2
+			dbg2("ACM%d Throttling noticed", acm->minor);
+#else
 			dbg("Throttling noticed");
+#endif
 			spin_lock_irqsave(&acm->read_lock, flags);
 			list_add(&buf->list, &acm->filled_read_bufs);
 			spin_unlock_irqrestore(&acm->read_lock, flags);
@@ -526,7 +585,11 @@ urbs:
 			return;
 		} else {
 			spin_unlock_irqrestore(&acm->read_lock, flags);
+#ifdef DEBUG2
+			dbg2("ACM%d acm_rx_tasklet: sending urb 0x%p, rcv 0x%p, buf 0x%p", acm->minor, rcv->urb, rcv, buf);
+#else
 			dbg("acm_rx_tasklet: sending urb 0x%p, rcv 0x%p, buf 0x%p", rcv->urb, rcv, buf);
+#endif
 		}
 	}
 	spin_lock_irqsave(&acm->read_lock, flags);
@@ -581,7 +644,11 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 	struct acm *acm;
 	int rv = -ENODEV;
 	int i;
+#ifdef DEBUG2
+	dbg2("ACM%d Entering acm_tty_open.", tty->index);
+#else
 	dbg("Entering acm_tty_open.");
+#endif
 
 	mutex_lock(&open_mutex);
 
@@ -674,7 +741,6 @@ static int acm_tty_chars_in_buffer(struct tty_struct *tty);
 static void acm_port_down(struct acm *acm)
 {
 	int i, nr = acm->rx_buflimit;
-	mutex_lock(&open_mutex);
 	if (acm->dev) {
 		usb_autopm_get_interface(acm->control);
 		acm_set_control(acm, acm->ctrlout = 0);
@@ -688,14 +754,23 @@ static void acm_port_down(struct acm *acm)
 		acm->control->needs_remote_wakeup = 0;
 		usb_autopm_put_interface(acm->control);
 	}
-	mutex_unlock(&open_mutex);
 }
 
 static void acm_tty_hangup(struct tty_struct *tty)
 {
-	struct acm *acm = tty->driver_data;
+	struct acm *acm;
+
+	mutex_lock(&open_mutex);
+	acm = tty->driver_data;
+
+	if (!acm)
+		goto out;
+
 	tty_port_hangup(&acm->port);
 	acm_port_down(acm);
+
+out:
+	mutex_unlock(&open_mutex);
 }
 
 static void acm_tty_close(struct tty_struct *tty, struct file *filp)
@@ -706,8 +781,8 @@ static void acm_tty_close(struct tty_struct *tty, struct file *filp)
 	   shutdown */
 	if (!acm)
 		return;
+	mutex_lock(&open_mutex);
 	if (tty_port_close_start(&acm->port, tty, filp) == 0) {
-		mutex_lock(&open_mutex);
 		if (!acm->dev) {
 			tty_port_tty_set(&acm->port, NULL);
 			acm_tty_unregister(acm);
@@ -719,6 +794,7 @@ static void acm_tty_close(struct tty_struct *tty, struct file *filp)
 	acm_port_down(acm);
 	tty_port_close_end(&acm->port, tty);
 	tty_port_tty_set(&acm->port, NULL);
+	mutex_unlock(&open_mutex);
 }
 
 static int acm_tty_write(struct tty_struct *tty,
@@ -730,7 +806,11 @@ static int acm_tty_write(struct tty_struct *tty,
 	int wbn;
 	struct acm_wb *wb;
 
+#ifdef DEBUG2
+	dbg2("ACM%d Entering acm_tty_write to write %d bytes,", acm->minor, count);
+#else
 	dbg("Entering acm_tty_write to write %d bytes,", count);
+#endif
 
 	if (!ACM_READY(acm))
 		return -EINVAL;
@@ -746,10 +826,18 @@ static int acm_tty_write(struct tty_struct *tty,
 	wb = &acm->wb[wbn];
 
 	count = (count > acm->writesize) ? acm->writesize : count;
+#ifdef DEBUG2
+	dbg2("ACM%d Get %d bytes...", acm->minor, count);
+#else
 	dbg("Get %d bytes...", count);
+#endif
 	memcpy(wb->buf, buf, count);
 	wb->len = count;
 	spin_unlock_irqrestore(&acm->write_lock, flags);
+
+#ifdef DEBUG2
+	at_dump("tx", acm->minor, buf, count);
+#endif
 
 	stat = acm_write_start(acm, wbn);
 	if (stat < 0)
@@ -857,6 +945,17 @@ static int acm_tty_ioctl(struct tty_struct *tty,
 
 	if (!ACM_READY(acm))
 		return -EINVAL;
+
+	switch(cmd) {
+		case IOCTL_ENABLE_FD:
+			printk(KERN_DEBUG "ACM: Enable fastdormancy");
+			enable_fd = 1;
+			return 0;
+		case IOCTL_DISABLE_FD:
+			printk(KERN_DEBUG "ACM: Disable fastdormancy");
+			enable_fd = 0;
+			return 0;
+	}
 
 	return -ENOIOCTLCMD;
 }
@@ -1361,7 +1460,11 @@ alloc_fail:
 static void stop_data_traffic(struct acm *acm)
 {
 	int i;
+#ifdef DEBUG2
+	dbg2("ACM%d Entering stop_data_traffic", acm->minor);
+#else
 	dbg("Entering stop_data_traffic");
+#endif
 
 	tasklet_disable(&acm->urb_task);
 
@@ -1400,6 +1503,7 @@ static void acm_disconnect(struct usb_interface *intf)
 
 	stop_data_traffic(acm);
 
+	usb_kill_anchored_urbs(&acm->deferred);
 	acm_write_buffers_free(acm);
 	usb_free_coherent(usb_dev, acm->ctrlsize, acm->ctrl_buffer,
 			  acm->ctrl_dma);
@@ -1428,6 +1532,17 @@ static int acm_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	struct acm *acm = usb_get_intfdata(intf);
 	int cnt;
+#ifdef USE_ERICSSON_WAKEUP_CMD
+	struct file *fp;
+	mm_segment_t fs;
+	char buffer[128] = {0};
+	int len = 0;
+	int timeout;
+#endif
+#ifdef DEBUG2
+	dbg2("ACM%d Enter suspend susp_count=%d event=0x%x",
+			acm->minor, acm->susp_count, message.event);
+#endif
 
 	if (message.event & PM_EVENT_AUTO) {
 		int b;
@@ -1459,6 +1574,64 @@ static int acm_suspend(struct usb_interface *intf, pm_message_t message)
 		stop_data_traffic(acm);
 
 	mutex_unlock(&acm->mutex);
+
+#ifdef USE_ERICSSON_WAKEUP_CMD
+	if (acm->minor == 1 && message.event != PM_EVENT_AUTO_SUSPEND) {
+#ifdef DEBUG2
+		dbg2("ACM%d send wakeset cmd", acm->minor);
+#else
+		printk(KERN_DEBUG "ttyACM send wakeset cmd");
+#endif
+		fs = get_fs();
+		set_fs(KERNEL_DS);
+		fp = filp_open("/dev/ttyACM0", O_RDWR | O_NONBLOCK, 0);
+		if (fp && fp->f_op && fp->f_op->write && fp->f_op->read) {
+send_wakeset_cmd:
+			if(enable_fd) {
+				printk(KERN_DEBUG "send AT*EFDORM;*EEWAKESET=1");
+				fp->f_op->write(fp, "AT*EFDORM;*EEWAKESET=1\r", 23, &fp->f_pos);
+			} else {
+				printk(KERN_DEBUG "send AT*EEWAKESET=1");
+				fp->f_op->write(fp, "AT*EEWAKESET=1\r", 15, &fp->f_pos);
+			}
+			for(timeout = 0; timeout < 10; timeout++) {
+				msleep(100);
+				len = fp->f_op->read(fp, buffer, 128, &fp->f_pos);
+				buffer[len] = '\0';
+#ifdef DEBUG2
+				dbg2("ACM%d rsp len=%d timeout=%d", acm->minor, len, timeout);
+#else
+				printk(KERN_DEBUG "ttyACM rsp len=%d timeout=%d", len, timeout);
+#endif
+				if (len < 2) continue;
+#ifdef DEBUG2
+				at_dump("rsp", acm->minor, buffer, len);
+#endif
+				if(strstr( buffer, "*EMRDY") != NULL) {
+#ifdef DEBUG2
+					dbg2("ACM%d get *EMRDY resend wakeset", acm->minor);
+#else
+					printk(KERN_DEBUG "ttyACM get *EMRDY resend wakeset");
+#endif
+					goto send_wakeset_cmd;
+				}
+				if(strstr( buffer, "OK") != NULL) {
+#ifdef DEBUG2
+					dbg2("ACM%d get rsp success", acm->minor);
+#else
+					printk(KERN_DEBUG "ttyACM set wakeset success");
+#endif
+					break;
+				}
+			}
+#ifdef DEBUG2
+			if(timeout == 10) dbg2("ACM%d wait rsp timeout", acm->minor);
+#endif
+			filp_close(fp, NULL);
+		}
+		set_fs(fs);
+	}
+#endif
 	return 0;
 }
 
@@ -1467,8 +1640,10 @@ static int acm_resume(struct usb_interface *intf)
 	struct acm *acm = usb_get_intfdata(intf);
 	struct acm_wb *wb;
 	int rv = 0;
-	struct urb *res;
 	int cnt;
+#ifdef CONFIG_PM
+	struct urb *res;
+#endif
 
 	spin_lock_irq(&acm->read_lock);
 	acm->susp_count -= 1;
@@ -1481,19 +1656,21 @@ static int acm_resume(struct usb_interface *intf)
 
 	mutex_lock(&acm->mutex);
 
-#ifdef CONFIG_PM
-	while ((res = usb_get_from_anchor(&acm->deferred))) {
-		printk("%s process buffered request \n", __func__);
-		rv = usb_submit_urb(res, GFP_ATOMIC);
-		if (rv < 0) {
-			dbg("usb_submit_urb(pending request) failed: %d", rv);
-		}
-	}
-#endif
-
 	if (acm->port.count) {
 		rv = usb_submit_urb(acm->ctrlurb, GFP_NOIO);
 		spin_lock_irq(&acm->write_lock);
+#ifdef CONFIG_PM
+		while ((res = usb_get_from_anchor(&acm->deferred))) {
+			rv = usb_submit_urb(res, GFP_ATOMIC);
+			if (rv < 0) {
+				dbg("usb_submit_urb(pending request)"
+					" failed: %d", rv);
+				usb_unanchor_urb(res);
+				acm_write_done(acm, res->context);
+			}
+		}
+		spin_unlock_irq(&acm->write_lock);
+#else
 		if (acm->delayed_wb) {
 			wb = acm->delayed_wb;
 			acm->delayed_wb = NULL;
@@ -1502,7 +1679,7 @@ static int acm_resume(struct usb_interface *intf)
 		} else {
 			spin_unlock_irq(&acm->write_lock);
 		}
-
+#endif
 
 		/*
 		 * delayed error checking because we must
@@ -1776,8 +1953,13 @@ static int __init acm_init(void)
 	acm_tty_driver->subtype = SERIAL_TYPE_NORMAL,
 	acm_tty_driver->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
 	acm_tty_driver->init_termios = tty_std_termios;
-	acm_tty_driver->init_termios.c_cflag = B9600 | CS8 | CREAD |
+	acm_tty_driver->init_termios.c_cflag = B115200 | CS8 | CREAD |
 								HUPCL | CLOCAL;
+
+	acm_tty_driver->init_termios.c_iflag = IGNBRK;
+	acm_tty_driver->init_termios.c_oflag = 0;
+	acm_tty_driver->init_termios.c_lflag = 0;
+
 	tty_set_operations(acm_tty_driver, &acm_ops);
 
 	retval = tty_register_driver(acm_tty_driver);

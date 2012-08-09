@@ -34,6 +34,20 @@
 extern int p2_wakeup;
 #endif
 
+#if defined(CONFIG_ARCH_ACER_T20)
+#include <asm/atomic.h>
+#include "../../../arch/arm/mach-tegra/board-acer-t20.h"
+
+extern int is3Gwakeup(void);
+extern int get_sku_id(void);
+static atomic_t wakeup_flag = ATOMIC_INIT(0);
+static int wakeup_resume_flag = -1;
+static int is_3g_sku = 0;
+#define TEGRA_GPIO_PC7 23
+#define TEGRA_GPIO_PI3 67
+static int wakeup_gpio = TEGRA_GPIO_PC7;
+#endif
+
 struct gpio_button_data {
 	struct gpio_keys_button *button;
 	struct input_dev *input;
@@ -397,7 +411,22 @@ static void gpio_keys_work_func(struct work_struct *work)
 	struct gpio_button_data *bdata =
 		container_of(work, struct gpio_button_data, work);
 
+#if defined(CONFIG_ARCH_ACER_T20)
+	if (is_3g_sku && (bdata->button->gpio == TEGRA_GPIO_PC7)) {
+		if (atomic_read(&wakeup_flag) == 0) {
+			atomic_set(&wakeup_flag, 1);
+			if (!is3Gwakeup()) {
+				printk(KERN_INFO "%s: first time report gpio_keys_report_event\n", __func__);
+				wakeup_resume_flag = 1;
+				gpio_keys_report_event(bdata);
+			} else
+				printk(KERN_INFO "%s: first time SKIP gpio_keys_report_event\n", __func__);
+		}
+	} else
+		gpio_keys_report_event(bdata);
+#else
 	gpio_keys_report_event(bdata);
+#endif
 }
 
 static void gpio_keys_timer(unsigned long _data)
@@ -432,6 +461,10 @@ static irqreturn_t gpio_keys_isr(int irq, void *dev_id)
 			jiffies + msecs_to_jiffies(bdata->timer_debounce));
 	else
 		schedule_work(&bdata->work);
+
+#if defined(CONFIG_ARCH_ACER_T20)
+	wakeup_gpio = button->gpio;
+#endif
 
 	return IRQ_HANDLED;
 }
@@ -603,6 +636,12 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 
 	device_init_wakeup(&pdev->dev, wakeup);
 
+#if defined(CONFIG_ARCH_ACER_T20)
+	if (get_sku_id() == BOARD_PICASSO_3G || get_sku_id() == BOARD_VANGOGH_3G) {
+		is_3g_sku = 1;
+	}
+#endif
+
 	return 0;
 
  fail3:
@@ -657,6 +696,11 @@ static int gpio_keys_suspend(struct device *dev)
 	struct gpio_keys_platform_data *pdata = pdev->dev.platform_data;
 	int i;
 
+#if defined(CONFIG_ARCH_ACER_T20)
+	atomic_set(&wakeup_flag, 0);
+	wakeup_resume_flag = -1;
+#endif
+
 	if (device_may_wakeup(&pdev->dev)) {
 		for (i = 0; i < pdata->nbuttons; i++) {
 			struct gpio_keys_button *button = &pdata->buttons[i];
@@ -680,6 +724,10 @@ static int gpio_keys_resume(struct device *dev)
 
 #if defined(CONFIG_ARCH_ACER_T20)
 	pr_info("%s\n", __func__);
+
+	if (wakeup_resume_flag == -1)
+		if (!is_3g_sku || !is3Gwakeup())
+			wakeup_resume_flag = 1;
 #endif
 
 	if (pdata->wakeup_key)
@@ -697,14 +745,31 @@ static int gpio_keys_resume(struct device *dev)
 
 #if defined(CONFIG_ARCH_ACER_T20)
 				pr_info("%s: wakeup_key is pressed\n", __func__);
-#endif
+
+				if (wakeup_resume_flag == 1) {
+					input_event(ddata->input, type, button->code, 1);
+					input_event(ddata->input, type, button->code, 0);
+					input_sync(ddata->input);
+				}
+#else
 				input_event(ddata->input, type, button->code, 1);
 				input_event(ddata->input, type, button->code, 0);
 				input_sync(ddata->input);
+#endif
 			}
 		}
+#if defined(CONFIG_ARCH_ACER_T20)
+		if (wakeup_resume_flag == 1)
+			gpio_keys_report_event(&ddata->data[i]);
+		else
+			printk(KERN_INFO "%s: SKIP gpio_keys_report_event, waken up by 3G\n", __func__);
+#else
 		gpio_keys_report_event(&ddata->data[i]);
+#endif
 	}
+#if defined(CONFIG_ARCH_ACER_T20)
+	wakeup_resume_flag = -1;
+#endif
 	input_sync(ddata->input);
 
 	return 0;
