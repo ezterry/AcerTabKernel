@@ -37,13 +37,6 @@
 #endif
 #endif
 
-#if defined(CONFIG_ARCH_ACER_T20)
-static struct kobject *dev_info_kobj;
-unsigned modem_idProduct;
-unsigned modem_idVendor;
-char *modem_Manufacturer;
-#endif
-
 struct usb_hub {
 	struct device		*intfdev;	/* the "interface" device */
 	struct usb_device	*hdev;
@@ -1305,20 +1298,8 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	 * external hubs for now.  Enable autosuspend for USB 3.0 roothubs,
 	 * since that isn't a "real" hub.
 	 */
-#if defined(CONFIG_ARCH_ACER_T30)
-	if (!hub_is_superspeed(hdev) || !hdev->parent) {
-		if(hdev->serial && !strcmp(hdev->serial,"tegra-ehci.1"))
-			usb_disable_autosuspend(hdev);
-		else if (hdev->serial && (!strcmp(hdev->serial,"tegra-ehci.0") || !strcmp(hdev->serial,"tegra-ehci.2")))
-			usb_enable_autosuspend(hdev);
-		else
-			usb_disable_autosuspend(hdev);
-	}
-#else
 	if (!hub_is_superspeed(hdev) || !hdev->parent)
 		usb_enable_autosuspend(hdev);
-#endif
-
 
 	if (hdev->level == MAX_TOPO_LEVEL) {
 		dev_err(&intf->dev,
@@ -1740,15 +1721,6 @@ static void announce_device(struct usb_device *udev)
 	show_string(udev, "Product", udev->product);
 	show_string(udev, "Manufacturer", udev->manufacturer);
 	show_string(udev, "SerialNumber", udev->serial);
-
-#if defined(CONFIG_ARCH_ACER_T20)
-	/* Check if USB device is 3G module */
-	if((udev->parent == udev->bus->root_hub) && !strcmp(udev->parent->serial,"tegra-ehci.1")) {
-		modem_idProduct = udev->descriptor.idProduct;
-		modem_Manufacturer = udev->manufacturer;
-		modem_idVendor = udev->descriptor.idVendor;
-	}
-#endif
 }
 #else
 static inline void announce_device(struct usb_device *udev) { }
@@ -3620,84 +3592,8 @@ static struct usb_driver hub_driver = {
 	.supports_autosuspend =	1,
 };
 
-#if defined(CONFIG_ARCH_ACER_T20)
-static ssize_t modem_idVendor_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
-{
-	char *s = buf;
-
-	s += sprintf(s, "%d", modem_idVendor);
-	return (s - buf);
-}
-
-
-static ssize_t modem_idProduct_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
-{
-	char *s = buf;
-
-	s += sprintf(s, "%d", modem_idProduct);
-	return (s - buf);
-}
-
-
-static ssize_t modem_Manufacturer_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
-{
-	char *s = buf;
-
-	s += sprintf(s, "%s", modem_Manufacturer);
-	return (s - buf);
-}
-
-static struct kobj_attribute modem_idVendor_attr = {
-	.attr = {
-		.name = "idVendor",
-		.mode = 0644,
-	},
-	.show = modem_idVendor_show,
-};
-
-static struct kobj_attribute modem_idProduct_attr = {
-	.attr = {
-		.name = "idProduct",
-		.mode = 0644,
-	},
-	.show = modem_idProduct_show,
-};
-
-static struct kobj_attribute modem_Manufacturer_attr = {
-	.attr = {
-		.name = "Manufacturer",
-		.mode = 0644,
-	},
-	.show = modem_Manufacturer_show,
-};
-
-static struct attribute * modem_info[] = {
-	&modem_idVendor_attr.attr,
-	&modem_idProduct_attr.attr,
-	&modem_Manufacturer_attr.attr,
-	NULL,
-};
-
-static struct attribute_group usb_modem_attr_group =
-{
-	.attrs = modem_info,
-};
-#endif
-
 int usb_hub_init(void)
 {
-#if defined(CONFIG_ARCH_ACER_T20)
-	int err = 0;
-
-	dev_info_kobj = kobject_create_and_add("dev-info_usb-modem", NULL);
-	if(dev_info_kobj == NULL) {
-		printk(KERN_INFO "dev-info_usb-modem: create kobject failed\n");
-        } else {
-		err = sysfs_create_group(dev_info_kobj, &usb_modem_attr_group);
-		if(err)
-			printk(KERN_INFO "dev-info_usb-modem: sysfs_create_group failed\n");
-	}
-#endif
 	if (usb_register(&hub_driver) < 0) {
 		printk(KERN_ERR "%s: can't register hub driver\n",
 			usbcore_name);
