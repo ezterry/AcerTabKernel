@@ -200,7 +200,7 @@ static struct tegra_ulpi_config ventana_ehci2_ulpi_phy_config = {
 
 static struct tegra_ehci_platform_data ventana_ehci2_ulpi_platform_data = {
 	.operating_mode = TEGRA_USB_HOST,
-	.power_down_on_bus_suspend = 1,
+	.power_down_on_bus_suspend = 0,
 	.phy_config = &ventana_ehci2_ulpi_phy_config,
 	.phy_type = TEGRA_USB_PHY_TYPE_LINK_ULPI,
 };
@@ -559,6 +559,26 @@ static void p_sensor_init(void)
 {
 	// enable gpio for psensor
 	tegra_gpio_enable(TEGRA_GPIO_PC1);
+}
+#endif
+
+#ifdef CONFIG_SIMDETECT
+static struct gpio_switch_platform_data simdetect_switch_platform_data = {
+	.gpio = TEGRA_GPIO_PI7,
+};
+static struct platform_device picasso_simdetect_switch = {
+	.name = "simdetect",
+	.id   = -1,
+	.dev  = {
+		.platform_data = &simdetect_switch_platform_data,
+	},
+};
+
+static void simdet_init(void)
+{
+	if(get_sku_id() == BOARD_PICASSO_3G || get_sku_id() == BOARD_VANGOGH_3G) {
+		platform_device_register(&picasso_simdetect_switch);
+	}
 }
 #endif
 
@@ -970,6 +990,9 @@ static void __init acer_t20_init(void)
 	ventana_setup_bluesleep();
 #if defined(CONFIG_ACER_VIBRATOR)
 	vib_init();
+#endif
+#ifdef CONFIG_SIMDETECT
+	simdet_init();
 #endif
 	tegra_release_bootloader_fb();
 }

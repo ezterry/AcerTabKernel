@@ -30,6 +30,33 @@
 #include <linux/i2c.h>
 #include "mpu.h"
 
+#define MPU3050_RETRY_COUNT 10
+
+static int i2c_transfer_retry(struct i2c_adapter *adap, struct i2c_msg *msgs, int num, int retry_num)
+{
+	int i, j, k;
+	int ret = 0;
+
+	for (i = 0; i < retry_num; i++) {
+		ret = i2c_transfer(adap, msgs, num);
+		if(ret == num)
+			break;
+		else
+			pr_err("[ERR] %s retry count = %d\n", __func__, i+1);
+	}
+	if (i == retry_num) {
+		for (j = 0; j < num; j++) {
+			pr_err("[ERR]     msgs[%d].addr  = 0x%04x\n", j, msgs[j].addr);
+			pr_err("[ERR]     msgs[%d].flags = 0x%04x\n", j, msgs[j].flags);
+			pr_err("[ERR]     msgs[%d].len   = %d\n", j, msgs[j].len);
+			for (k = 0; k < msgs[j].len; k++)
+				pr_err("[ERR]    msgs[%d].buff[%d] = 0x%02x\n",
+					j, k, msgs[j].buf[k]);
+		}
+	}
+	return ret;
+}
+
 int sensor_i2c_write(struct i2c_adapter *i2c_adap,
 		     unsigned char address,
 		     unsigned int len, unsigned char const *data)
@@ -45,7 +72,7 @@ int sensor_i2c_write(struct i2c_adapter *i2c_adap,
 	msgs[0].buf = (unsigned char *) data;
 	msgs[0].len = len;
 
-	res = i2c_transfer(i2c_adap, msgs, 1);
+	res = i2c_transfer_retry(i2c_adap, msgs, 1, MPU3050_RETRY_COUNT);
 	if (res < 1)
 		return res;
 	else
@@ -84,7 +111,7 @@ int sensor_i2c_read(struct i2c_adapter *i2c_adap,
 	msgs[1].buf = data;
 	msgs[1].len = len;
 
-	res = i2c_transfer(i2c_adap, msgs, 2);
+	res = i2c_transfer_retry(i2c_adap, msgs, 2, MPU3050_RETRY_COUNT);
 	if (res < 2)
 		return res;
 	else
@@ -135,7 +162,7 @@ int mpu_memory_read(struct i2c_adapter *i2c_adap,
 	msgs[3].buf = data;
 	msgs[3].len = len;
 
-	ret = i2c_transfer(i2c_adap, msgs, 4);
+	ret = i2c_transfer_retry(i2c_adap, msgs, 4, MPU3050_RETRY_COUNT);
 	if (ret != 4)
 		return ret;
 	else
@@ -184,7 +211,7 @@ int mpu_memory_write(struct i2c_adapter *i2c_adap,
 	msgs[2].buf = (unsigned char *) buf;
 	msgs[2].len = len + 1;
 
-	ret = i2c_transfer(i2c_adap, msgs, 3);
+	ret = i2c_transfer_retry(i2c_adap, msgs, 3, MPU3050_RETRY_COUNT);
 	if (ret != 3)
 		return ret;
 	else

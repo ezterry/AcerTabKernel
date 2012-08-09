@@ -660,11 +660,6 @@ struct dvfs_rail *tegra_dvfs_get_rail_by_name(const char *reg_id)
 	mutex_unlock(&dvfs_lock);
 	return NULL;
 }
-#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
-EXPORT_SYMBOL_GPL(tegra_dvfs_rail_enable);
-EXPORT_SYMBOL_GPL(tegra_dvfs_rail_disable_by_name);
-EXPORT_SYMBOL_GPL(tegra_dvfs_get_rail_by_name);
-#endif
 
 bool tegra_dvfs_rail_updating(struct clk *clk)
 {

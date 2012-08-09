@@ -89,6 +89,24 @@ static inline u8 temperature_to_value(bool extended, s8 temp)
 	return extended ? (u8)(temp + EXTENDED_RANGE_OFFSET) : (u8)temp;
 }
 
+static s32 nct1008_i2c_write_byte_retry(struct i2c_client *client, u8 command, u8 value)
+{
+	int i, ret;
+	for(i=0; i<=2; i++){
+		msleep(10);
+		ret = i2c_smbus_write_byte_data(client, command, value);
+		if(ret == 0)
+			break;
+	}
+
+	if(i == 3){
+		dev_err(&client->dev,"%s: retry 4 times failed, error=%d\n",
+			__func__, __LINE__, ret);
+		return -EINVAL;
+	}
+	return ret;
+}
+
 static int nct1008_get_temp(struct device *dev, long *pTemp)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -467,7 +485,7 @@ static int nct1008_enable(struct i2c_client *client)
 	struct nct1008_data *data = i2c_get_clientdata(client);
 	int err;
 
-	err = i2c_smbus_write_byte_data(client, CONFIG_WR,
+	err = nct1008_i2c_write_byte_retry(client, CONFIG_WR,
 				  data->config & ~STANDBY_BIT);
 	if (err < 0)
 		dev_err(&client->dev, "%s, line=%d, i2c write error=%d\n",
@@ -480,7 +498,7 @@ static int nct1008_disable(struct i2c_client *client)
 	struct nct1008_data *data = i2c_get_clientdata(client);
 	int err;
 
-	err = i2c_smbus_write_byte_data(client, CONFIG_WR,
+	err = nct1008_i2c_write_byte_retry(client, CONFIG_WR,
 				  data->config | STANDBY_BIT);
 	if (err < 0)
 		dev_err(&client->dev, "%s, line=%d, i2c write error=%d\n",

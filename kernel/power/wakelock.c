@@ -40,11 +40,6 @@ module_param_named(debug_mask, debug_mask, int, S_IRUGO | S_IWUSR | S_IWGRP);
 #define WAKE_LOCK_AUTO_EXPIRE            (1U << 10)
 #define WAKE_LOCK_PREVENTING_SUSPEND     (1U << 11)
 
-#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
-extern int tegra_dvfs_rail_disable_by_name(const char *reg_id);
-extern struct dvfs_rail *tegra_dvfs_get_rail_by_name(const char *reg_id);
-extern void tegra_dvfs_rail_enable(struct dvfs_rail *rail);
-#endif
 static DEFINE_SPINLOCK(list_lock);
 static LIST_HEAD(inactive_locks);
 static struct list_head active_wake_locks[WAKE_LOCK_TYPE_COUNT];
@@ -264,20 +259,12 @@ static void suspend(struct work_struct *work)
 {
 	int ret;
 	int entry_event_num;
-#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
-	struct dvfs_rail *rail = NULL;
-#endif
 
 	if (has_wake_lock(WAKE_LOCK_SUSPEND)) {
 		if (debug_mask & DEBUG_SUSPEND)
 			pr_info("suspend: abort suspend\n");
 		return;
 	}
-
-#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
-	pr_info("dvfs rail disable for vdd_core before suspend\n");
-	tegra_dvfs_rail_disable_by_name("vdd_core");
-#endif
 
 	entry_event_num = current_event_num;
 	sys_sync();
@@ -294,15 +281,6 @@ static void suspend(struct work_struct *work)
 			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 			tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
 	}
-
-#if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
-	rail = tegra_dvfs_get_rail_by_name("vdd_core");
-	if (rail) {
-		pr_info("dvfs rail enable for vdd_core after resume\n");
-		tegra_dvfs_rail_enable(rail);
-	}
-#endif
-
 	if (current_event_num == entry_event_num) {
 		if (debug_mask & DEBUG_SUSPEND)
 			pr_info("suspend: pm_suspend returned with no event\n");
