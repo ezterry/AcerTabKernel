@@ -28,7 +28,7 @@
 
 static int ulpi_viewport_wait(void __iomem *view, u32 mask)
 {
-	unsigned long usec = 2000;
+	unsigned long usec = 5000;
 
 	while (usec--) {
 		if (!(readl(view) & mask))
@@ -58,20 +58,42 @@ static int ulpi_viewport_read(struct otg_transceiver *otg, u32 reg)
 	return ULPI_VIEW_DATA_READ(readl(view));
 }
 
-static int ulpi_viewport_write(struct otg_transceiver *otg, u32 val, u32 reg)
+static int ulpi_viewport_write_1(struct otg_transceiver *otg, u32 val, u32 reg)
 {
 	int ret;
 	void __iomem *view = otg->io_priv;
 
 	writel(ULPI_VIEW_WAKEUP | ULPI_VIEW_WRITE, view);
 	ret = ulpi_viewport_wait(view, ULPI_VIEW_WAKEUP);
-	if (ret)
+	if (ret) {
+		printk("%s() line : %d \n", __func__, __LINE__);
 		return ret;
+	}
 
 	writel(ULPI_VIEW_RUN | ULPI_VIEW_WRITE | ULPI_VIEW_DATA_WRITE(val) |
 						 ULPI_VIEW_ADDR(reg), view);
 
-	return ulpi_viewport_wait(view, ULPI_VIEW_RUN);
+	ret = ulpi_viewport_wait(view, ULPI_VIEW_RUN);
+	if (ret) {
+		printk("%s() line : %d \n", __func__, __LINE__);
+		return ret;
+	}
+
+}
+
+static int ulpi_viewport_write(struct otg_transceiver *otg, u32 val, u32 reg)
+{
+	int ret;
+	int retry = 1000;
+	void __iomem *view = otg->io_priv;
+	ret = ulpi_viewport_write_1(otg, val, reg);
+	while((retry == 0) || (ret))
+	{
+		printk("%s(retry:%d) line : %d \n", __func__, retry, __LINE__);
+		ret = ulpi_viewport_write_1(otg, val, reg);
+		retry--;
+	}
+	return ret;
 }
 
 struct otg_io_access_ops ulpi_viewport_access_ops = {

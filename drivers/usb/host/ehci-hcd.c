@@ -114,6 +114,9 @@ MODULE_PARM_DESC(hird, "host initiated resume duration, +1 for each 75us\n");
 
 #define	INTR_MASK (STS_IAA | STS_FATAL | STS_PCD | STS_ERR | STS_INT)
 
+#define MAX_ERR_COUNT	256
+static int err_count = 0;
+
 /*-------------------------------------------------------------------------*/
 
 #include "ehci.h"
@@ -785,6 +788,21 @@ static irqreturn_t ehci_irq (struct usb_hcd *hcd)
 
 	/* Shared IRQ? */
 	masked_status = status & INTR_MASK;
+
+	if ((status & (STS_FLR | STS_INT)) == (STS_FLR | STS_INT)) {
+		if (STS_ERR & status)
+			err_count++;
+		else
+			err_count = 0;
+	}
+
+	if ((err_count > MAX_ERR_COUNT) && (STS_ERR & status)) {
+		ehci_dbg (ehci, "max error count reached\n");
+		ehci_writel(ehci, masked_status, &ehci->regs->status);
+		spin_unlock(&ehci->lock);
+		return IRQ_HANDLED;
+	}
+
 	if (!masked_status || unlikely(hcd->state == HC_STATE_HALT)) {
 		spin_unlock(&ehci->lock);
 		return IRQ_NONE;
