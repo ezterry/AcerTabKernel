@@ -75,7 +75,7 @@ static struct dvfs_rail tegra2_dvfs_rail_vdd_cpu = {
 	.reg_id = "vdd_cpu",
 #if defined(CONFIG_TEGRA_OVERCLOCK)
 	.max_millivolts = 1400,
-	.min_millivolts = 750,
+	.min_millivolts = 675,
 	.nominal_millivolts = 1375,
 #else
 	.max_millivolts = 1125,
