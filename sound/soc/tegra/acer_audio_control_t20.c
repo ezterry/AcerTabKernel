@@ -58,6 +58,9 @@
 #define ACER_DBG(fmt, arg...) do {} while (0)
 #endif
 
+/* When set to '0' we disable tuning and vol control */
+int acer_audio_enabled = 1;
+
 /* Module function */
 static int acer_audio_control_probe(struct platform_device *pdev);
 static int acer_audio_control_remove(struct platform_device *pdev);
@@ -291,12 +294,16 @@ int switch_audio_table(int control_mode, bool fromAP)
 	if (!fromAP) {
 		audio_data.mode.input_source = control_mode;
 	}
-	tune_codec_setting(control_mode);
+	if(acer_audio_enabled)
+		tune_codec_setting(control_mode);
 	setAudioTable(control_mode);
 }
 
 void acer_volume_setting(struct snd_soc_codec *codec, struct snd_pcm_substream *substream)
 {
+	if(!acer_audio_enabled)
+		return;
+
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		snd_soc_write(codec, WM8903_ANALOGUE_OUT1_LEFT, HPOUT_VOL);
 		snd_soc_write(codec, WM8903_ANALOGUE_OUT1_RIGHT, HPOUT_VOL);
@@ -379,6 +386,7 @@ static void __exit acer_audio_control_exit(void)
 	platform_driver_unregister(&acer_audio_control_driver);
 }
 
+module_param_named(acer_audio_enabled,acer_audio_enabled,int,S_IRUGO | S_IWUSR);
 module_init(acer_audio_control_init);
 module_exit(acer_audio_control_exit);
 
